@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:pages": "BASE_PATH=/material-blast-lab/ npm run build && npm run harden:dist",
+    "harden:dist": "node scripts/harden-dist.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -14,6 +16,7 @@
   },
   "devDependencies": {
     "@types/three": "^0.184.1",
+    "javascript-obfuscator": "^5.4.3",
     "typescript": "^6.0.3",
     "vite": "^8.0.16"
   }

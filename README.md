@@ -19,6 +19,12 @@ Production build:
 npm run build
 ```
 
+Production build for GitHub Pages:
+
+```sh
+npm run build:pages
+```
+
 ## Controls
 
 - Mouse move: aim the cannon
@@ -72,9 +78,9 @@ The score appears after the shot settles for a few seconds:
 
 ## CI/CD
 
-GitHub Actions runs `npm ci` and `npm run build` on pushes and pull requests targeting `main`.
+GitHub Actions runs `npm ci` and `npm run build:pages` on pushes and pull requests targeting `main`, so CI validates the same minified, split, and obfuscated artifact shape used by deployment.
 
-GitHub Pages deployment runs on pushes to `main` and from manual workflow dispatch. The deploy workflow builds the Vite app with `BASE_PATH=/material-blast-lab/`, uploads `dist`, and deploys it through the `github-pages` environment.
+GitHub Pages deployment runs on pushes to `main` and from manual workflow dispatch. The deploy workflow builds the Vite app with `BASE_PATH=/material-blast-lab/`, splits application and vendor chunks, obfuscates the first-party application chunk, uploads `dist`, and deploys it through the `github-pages` environment.
 
 Published site:
 
