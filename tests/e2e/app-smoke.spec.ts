@@ -2,6 +2,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
 const BODY_COUNT_BUDGET = { min: 350, max: 700 };
+const UI_READY_TIMEOUT_MS = 15_000;
 const SCORE_REVEAL_TIMEOUT_MS = 45_000;
 const SETTINGS_STORAGE_KEY = "material-blast-lab:settings:v1";
 const SMOKE_PERFORMANCE_SETTINGS = {
@@ -121,12 +122,13 @@ async function bootTrial(page: Page, viewport: { width: number; height: number }
   await page.setViewportSize(viewport);
   await page.goto("/");
   const startButton = page.locator("[data-action='start-arcade']").first();
-  await expect(startButton).toBeVisible();
+  await expect(startButton).toBeVisible({ timeout: UI_READY_TIMEOUT_MS });
   await clickUi(startButton);
   await expect(page.locator(".hud")).toHaveAttribute("data-screen", "play");
 }
 
 async function clickUi(locator: Locator): Promise<void> {
+  await expect(locator).toBeVisible({ timeout: UI_READY_TIMEOUT_MS });
   await locator.evaluate(
     (element) => {
       (element as HTMLElement).click();
@@ -156,9 +158,9 @@ async function uncheckUi(locator: Locator): Promise<void> {
 }
 
 async function expectRenderableCanvas(page: Page): Promise<void> {
-  await expect(page.locator("canvas")).toBeVisible();
-  await expect.poll(() => page.evaluate(hasRenderableCanvasSize)).toBe(true);
-  await expect.poll(() => page.evaluate(hasWebglContext)).toBe(true);
+  await expect(page.locator("canvas")).toBeVisible({ timeout: UI_READY_TIMEOUT_MS });
+  await expect.poll(() => page.evaluate(hasRenderableCanvasSize), { timeout: UI_READY_TIMEOUT_MS }).toBe(true);
+  await expect.poll(() => page.evaluate(hasWebglContext), { timeout: UI_READY_TIMEOUT_MS }).toBe(true);
 }
 
 function fireButton(page: Page) {

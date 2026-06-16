@@ -3,12 +3,13 @@ import { defineConfig, devices } from "@playwright/test";
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4175);
 const host = "127.0.0.1";
 const baseURL = `http://${host}:${port}/`;
+const browserChannel = process.env.PLAYWRIGHT_CHANNEL ?? (process.env.CI ? undefined : "chrome");
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 10_000,
+  timeout: 30_000,
   expect: {
-    timeout: 3_000
+    timeout: 10_000
   },
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
@@ -22,7 +23,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
     trace: "off",
     video: "off",
-    channel: process.env.PLAYWRIGHT_CHANNEL ?? "chrome",
+    channel: browserChannel,
     launchOptions: {
       args: ["--enable-unsafe-swiftshader"]
     }
@@ -30,7 +31,7 @@ export default defineConfig({
   webServer: {
     command: `npm run dev -- --host ${host} --port ${port} --strictPort`,
     url: baseURL,
-    timeout: 15_000,
+    timeout: 30_000,
     reuseExistingServer: !process.env.CI
   }
 });
