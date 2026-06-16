@@ -28,6 +28,17 @@ Production build for GitHub Pages:
 npm run build:pages
 ```
 
+Fast validation:
+
+```sh
+npm test
+```
+
+`npm test` runs the Vitest unit suite first, then a single Playwright smoke test
+against a local Vite server. The smoke test is intentionally narrow: it checks
+boot, HUD layout in a mobile viewport, level population, and the first fire
+transition without waiting for final scoring.
+
 ## Controls
 
 - Mouse move: aim the cannon
@@ -81,7 +92,7 @@ The score appears after the shot settles for a few seconds:
 
 ## CI/CD
 
-GitHub Actions runs `npm ci` and `npm run build:pages` on pushes and pull requests targeting `main`, so CI validates the same minified, split, and obfuscated artifact shape used by deployment.
+GitHub Actions runs `npm ci`, `npm test`, and `npm run build:pages` on pushes and pull requests targeting `main`, so CI validates fast unit/browser behavior plus the same minified, split, and obfuscated artifact shape used by deployment.
 
 GitHub Pages deployment runs on pushes to `main` and from manual workflow dispatch. The deploy workflow builds the Vite app with `BASE_PATH=/material-blast-lab/`, splits application and vendor chunks, obfuscates the first-party application chunk, uploads `dist`, and deploys it through the `github-pages` environment.
 
