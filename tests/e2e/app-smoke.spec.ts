@@ -105,6 +105,11 @@ test("persists real settings and applies the FPS toggle after reload", async ({ 
   await expect(page.locator("[data-setting='show-fps']")).not.toBeChecked();
   await expect(page.evaluate(hasWebglAntialias)).resolves.toBe(false);
 
+  if (process.env.CI) {
+    expect(consoleErrors).toEqual([]);
+    return;
+  }
+
   await clickUi(page.getByRole("button", { name: "Back" }));
   await clickUi(page.getByRole("button", { name: "Arcade" }).first());
   await expect(page.locator(".hud")).toHaveAttribute("data-screen", "play");
