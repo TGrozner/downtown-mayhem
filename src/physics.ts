@@ -2,6 +2,14 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { MaterialDefinition, MaterialId } from "./materialCatalog";
 
+const MAX_ACTIVE_DEBRIS = 260;
+const SETTLED_ACTIVE_DEBRIS_TARGET = 150;
+const MAX_FROZEN_RUBBLE = 720;
+const RUBBLE_FREEZE_INTERVAL_SECONDS = 0.18;
+const SETTLED_RUBBLE_MIN_AGE_MS = 680;
+const FORCED_RUBBLE_MIN_AGE_MS = 280;
+const MAX_RUBBLE_FREEZE_CENTER_Y = 0.78;
+
 export type PhysicsCategory = "structure" | "projectile" | "debris";
 export type ScoreRole = "target" | "neutral";
 export type PhysicsBodyType = "dynamic" | "fixed";
@@ -143,7 +151,11 @@ export class PhysicsWorld {
   private readonly scene: THREE.Scene;
   private readonly debrisQueue: number[] = [];
   private debrisQueueHead = 0;
-  private readonly maxDebris = 500;
+  private readonly maxDebris = MAX_ACTIVE_DEBRIS;
+  private readonly settledDebrisTarget = SETTLED_ACTIVE_DEBRIS_TARGET;
+  private readonly maxFrozenDebris = MAX_FROZEN_RUBBLE;
+  private readonly frozenDebrisMeshes: THREE.Mesh[] = [];
+  private rubbleFreezeElapsed = 0;
   private readonly eventQueue = new RAPIER.EventQueue(true);
   private readonly colliderOwners = new Map<number, number>();
   private readonly trafficObjectIds = new Set<number>();
@@ -201,6 +213,11 @@ export class PhysicsWorld {
       this.accumulator -= this.fixedTimestep;
     }
     this.syncMeshes();
+    this.rubbleFreezeElapsed += deltaSeconds;
+    if (this.rubbleFreezeElapsed >= RUBBLE_FREEZE_INTERVAL_SECONDS) {
+      this.rubbleFreezeElapsed = 0;
+      this.freezeSettledDebris();
+    }
   }
 
   addStaticBox(options: StaticBoxOptions): THREE.Mesh {
@@ -492,11 +509,15 @@ export class PhysicsWorld {
     }
     this.scene.remove(object.mesh);
     disposeMeshTree(object.mesh);
+    this.detachObjectPhysics(object);
+  }
+
+  private detachObjectPhysics(object: PhysicsObject): void {
     this.colliderOwners.delete(object.collider.handle);
     this.trafficObjectIds.delete(object.id);
     this.preStepVelocities.delete(object.id);
     this.world.removeRigidBody(object.body);
-    this.objects.delete(id);
+    this.objects.delete(object.id);
   }
 
   clearDynamic(): void {
@@ -505,6 +526,7 @@ export class PhysicsWorld {
     }
     this.debrisQueue.length = 0;
     this.debrisQueueHead = 0;
+    this.clearFrozenDebris();
   }
 
   clearDebris(): void {
@@ -514,6 +536,7 @@ export class PhysicsWorld {
       }
     }
     this.compactDebrisQueue();
+    this.clearFrozenDebris();
   }
 
   clearStatics(): void {
@@ -601,16 +624,22 @@ export class PhysicsWorld {
   }
 
   private enforceDebrisCap(): void {
-    while (this.debrisQueue.length - this.debrisQueueHead > this.maxDebris) {
+    while (this.activeDebrisCount() > this.maxDebris) {
       const id = this.debrisQueue[this.debrisQueueHead];
       this.debrisQueueHead += 1;
       if (id !== undefined) {
-        this.removeObject(id);
+        const object = this.objects.get(id);
+        if (object && this.shouldFreezeDebrisAsRubble(object, true)) {
+          this.freezeDebrisObject(object);
+        } else if (object) {
+          this.removeObject(object.id);
+        }
       }
     }
     if (this.debrisQueueHead > 96 && this.debrisQueueHead * 2 > this.debrisQueue.length) {
       this.compactDebrisQueue();
     }
+    this.trimFrozenDebris();
   }
 
   private compactDebrisQueue(): void {
@@ -624,6 +653,104 @@ export class PhysicsWorld {
     }
     this.debrisQueue.length = write;
     this.debrisQueueHead = 0;
+  }
+
+  private activeDebrisCount(): number {
+    return this.debrisQueue.length - this.debrisQueueHead;
+  }
+
+  private freezeSettledDebris(): void {
+    if (this.activeDebrisCount() <= this.settledDebrisTarget || this.frozenDebrisMeshes.length >= this.maxFrozenDebris) {
+      return;
+    }
+
+    this.compactDebrisQueue();
+    let activeCount = this.activeDebrisCount();
+    for (
+      let i = this.debrisQueueHead;
+      i < this.debrisQueue.length && activeCount > this.settledDebrisTarget && this.frozenDebrisMeshes.length < this.maxFrozenDebris;
+      i += 1
+    ) {
+      const id = this.debrisQueue[i];
+      const object = id === undefined ? undefined : this.objects.get(id);
+      if (object && this.shouldFreezeDebrisAsRubble(object, false)) {
+        this.freezeDebrisObject(object);
+        activeCount -= 1;
+      }
+    }
+    this.compactDebrisQueue();
+    this.trimFrozenDebris();
+  }
+
+  private freezeDebrisObject(object: PhysicsObject): void {
+    const translation = object.body.translation();
+    const rotation = object.body.rotation();
+    object.mesh.position.set(translation.x, translation.y, translation.z);
+    object.mesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+    object.mesh.castShadow = false;
+    object.mesh.receiveShadow = true;
+    object.mesh.userData.frozenDebris = true;
+    delete object.mesh.userData.physicsId;
+    object.mesh.traverse((child) => {
+      child.updateMatrix();
+      child.matrixAutoUpdate = false;
+    });
+    this.detachObjectPhysics(object);
+    this.frozenDebrisMeshes.push(object.mesh);
+  }
+
+  private shouldFreezeDebrisAsRubble(object: PhysicsObject, forced: boolean): boolean {
+    if (!object.isDebris || object.category !== "debris") {
+      return false;
+    }
+
+    const ageMs = performance.now() - object.createdAt;
+    if (ageMs < (forced ? FORCED_RUBBLE_MIN_AGE_MS : SETTLED_RUBBLE_MIN_AGE_MS)) {
+      return false;
+    }
+
+    const longestAxis = Math.max(object.dimensions.x, object.dimensions.y, object.dimensions.z);
+    const volume = object.dimensions.x * object.dimensions.y * object.dimensions.z;
+    if (longestAxis < 0.16 || volume < 0.0025) {
+      return false;
+    }
+
+    const position = object.body.translation();
+    const maxCenterY = Math.max(MAX_RUBBLE_FREEZE_CENTER_Y, object.dimensions.y * 0.5 + 0.18);
+    if (position.y > maxCenterY) {
+      return false;
+    }
+
+    const speedSq = vectorLengthSq(object.body.linvel());
+    if (forced) {
+      return speedSq <= 9;
+    }
+
+    if (object.body.isSleeping()) {
+      return true;
+    }
+    return speedSq <= 0.36 && vectorLengthSq(object.body.angvel()) <= 2.8;
+  }
+
+  private trimFrozenDebris(): void {
+    while (this.frozenDebrisMeshes.length > this.maxFrozenDebris) {
+      const mesh = this.frozenDebrisMeshes.shift();
+      if (mesh) {
+        this.removeFrozenDebrisMesh(mesh);
+      }
+    }
+  }
+
+  private clearFrozenDebris(): void {
+    for (const mesh of this.frozenDebrisMeshes) {
+      this.removeFrozenDebrisMesh(mesh);
+    }
+    this.frozenDebrisMeshes.length = 0;
+  }
+
+  private removeFrozenDebrisMesh(mesh: THREE.Mesh): void {
+    this.scene.remove(mesh);
+    disposeMeshTree(mesh);
   }
 
   private capturePreStepVelocities(): void {
@@ -671,6 +798,10 @@ export class PhysicsWorld {
 
 function vectorFromRapier(v: { x: number; y: number; z: number }): THREE.Vector3 {
   return new THREE.Vector3(v.x, v.y, v.z);
+}
+
+function vectorLengthSq(v: { x: number; y: number; z: number }): number {
+  return v.x * v.x + v.y * v.y + v.z * v.z;
 }
 
 function advanceWaypointTraffic(position: THREE.Vector3, route: TrafficRoute, deltaSeconds: number): void {

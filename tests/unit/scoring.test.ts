@@ -21,8 +21,8 @@ describe("ShotScoreTracker", () => {
     );
 
     expect(events.map((event) => [event.kind, event.label, event.points])).toEqual([
-      ["target", "BREAK", 110],
-      ["chaos", "COLLATERAL", 96]
+      ["target", "TARGET BREAK", 110],
+      ["chaos", "COLLATERAL SURGE", 96]
     ]);
 
     expect(
@@ -54,25 +54,30 @@ describe("ShotScoreTracker", () => {
     });
     expect(tracker.addChainReaction(100, new THREE.Vector3(0, 0, 0))[0]).toMatchObject({
       label: "CHAIN x2",
-      points: 142,
+      points: 112,
       combo: 2
     });
     expect(tracker.addChainReaction(100, new THREE.Vector3(0, 0, 0))[0]).toMatchObject({
       label: "CASCADE x3",
-      points: 184,
+      points: 124,
       combo: 3
     });
     expect(tracker.addChainReaction(100, new THREE.Vector3(0, 0, 0))[0]).toMatchObject({
       label: "COMBO x4",
-      points: 226,
+      points: 115,
       combo: 4
+    });
+    expect(tracker.addChainReaction(100, new THREE.Vector3(0, 0, 0), "POWER RELAY BLAST")[0]).toMatchObject({
+      label: "POWER RELAY BLAST x5",
+      points: 109,
+      combo: 5
     });
 
     expect(tracker.finalize(fakePhysics([]))).toMatchObject({
-      chainReactionBonus: 685,
-      chainReactionCount: 4,
-      maxChainCombo: 4,
-      totalScore: 685
+      chainReactionBonus: 588,
+      chainReactionCount: 5,
+      maxChainCombo: 5,
+      totalScore: 588
     });
   });
 
@@ -104,6 +109,22 @@ describe("ShotScoreTracker", () => {
     expect(tracker.finalize(fakePhysics([]))).toMatchObject({
       totalScore: 2_625_000,
       mayhemRating: "CITY WRECKER"
+    });
+  });
+
+  test("caps oversized chain events while keeping combo readable", () => {
+    const tracker = new ShotScoreTracker();
+    tracker.beginShot(PROJECTILES.slug);
+
+    expect(tracker.addChainReaction(50_000, new THREE.Vector3(0, 0, 0), "GAS LINE BLAST")[0]).toMatchObject({
+      label: "GAS LINE BLAST",
+      points: 900,
+      combo: 1
+    });
+    expect(tracker.addChainReaction(50_000, new THREE.Vector3(0, 0, 0), "GAS LINE BLAST")[0]).toMatchObject({
+      label: "GAS LINE BLAST x2",
+      points: 1008,
+      combo: 2
     });
   });
 });

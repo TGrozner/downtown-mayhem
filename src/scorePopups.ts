@@ -10,11 +10,11 @@ interface ScorePopup {
   visible: boolean;
 }
 
-const MAX_POPUPS_PER_PUSH = 3;
-const MAX_ACTIVE_POPUPS = 10;
+const MAX_POPUPS_PER_PUSH = 4;
+const MAX_ACTIVE_POPUPS = 12;
 const MAX_CHAIN_POPUPS_PER_PUSH = 1;
-const MAX_NON_CHAIN_POPUPS_PER_PUSH = 2;
-const MIN_POPUP_POINTS = 18;
+const MAX_NON_CHAIN_POPUPS_PER_PUSH = 3;
+const MIN_POPUP_POINTS = 12;
 
 export class ScorePopupLayer {
   private readonly root: HTMLDivElement;
@@ -78,7 +78,7 @@ export class ScorePopupLayer {
         element,
         position: event.position.clone(),
         life: 0,
-        maxLife: event.kind === "chain" ? 1.85 + Math.min(0.55, ((event.combo ?? 1) - 1) * 0.14) : 1.65,
+        maxLife: event.kind === "chain" ? 2.3 + Math.min(0.7, ((event.combo ?? 1) - 1) * 0.16) : 2.15,
         maxOpacity: event.kind === "chain" ? 0.9 : 0.84,
         visible: true
       });
@@ -142,7 +142,7 @@ export class ScorePopupLayer {
 
   private showChainMeter(event: ScoreEvent): void {
     const combo = event.combo ?? 1;
-    this.chainMeterLife = 2.45;
+    this.chainMeterLife = 2.9;
     this.chainMeter.className = `chain-meter is-visible ${chainPopupClass(combo)}`;
     this.chainMeterVisible = true;
     this.chainMeter.textContent = `${event.label}  +${event.points}`;

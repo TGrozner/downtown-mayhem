@@ -447,12 +447,15 @@ export class DestructionSystem {
     const offset = position.sub(origin);
     const distance = Math.max(offset.length(), 0.001);
     const falloff = distance < blastRadius ? (1 - distance / blastRadius) ** 1.45 : 0.12;
-    const direction = this.computeBlastDirection(offset, 0.4, 0.16);
-    const impulseMagnitude = (blastStrength * (falloff + 0.16)) / Math.max(0.48, material.massFactor) * 0.62;
+    const smallFragmentBoost = smallFragmentFlightBoost(fragment.dimensions);
+    const lift = material.id === "concrete" || material.id === "metal" ? 0.52 : 0.68;
+    const direction = this.computeBlastDirection(offset, lift, 0.24);
+    const impulseMagnitude =
+      (blastStrength * (falloff + 0.18)) / Math.max(0.48, material.massFactor) * 0.78 * smallFragmentBoost;
     const impulse = direction.multiplyScalar(impulseMagnitude);
     fragment.body.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
 
-    const torque = randomUnitVector(this.rng).multiplyScalar(blastStrength * 0.1 * material.angularResponse);
+    const torque = randomUnitVector(this.rng).multiplyScalar(blastStrength * 0.13 * material.angularResponse * smallFragmentBoost);
     fragment.body.applyTorqueImpulse({ x: torque.x, y: torque.y, z: torque.z }, true);
   }
 
@@ -619,11 +622,11 @@ function limitFragmentMotion(fragment: PhysicsObject, materialId: MaterialId, so
   if (velocity.length() > maxSpeed) {
     velocity.setLength(maxSpeed);
   }
-  velocity.y = Math.min(velocity.y, maxSpeed * 0.38);
+  velocity.y = Math.min(velocity.y, maxSpeed * verticalFragmentSpeedScale(materialId));
   fragment.body.setLinvel({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
 
   const angularVelocity = vectorFromRapier(fragment.body.angvel());
-  const maxAngularSpeed = sourceWasDebris ? 4.2 : 6.2;
+  const maxAngularSpeed = sourceWasDebris ? 4.8 : 7.2;
   if (angularVelocity.length() > maxAngularSpeed) {
     angularVelocity.setLength(maxAngularSpeed);
     fragment.body.setAngvel({ x: angularVelocity.x, y: angularVelocity.y, z: angularVelocity.z }, true);
@@ -634,15 +637,32 @@ function maxInitialFragmentSpeed(materialId: MaterialId): number {
   switch (materialId) {
     case "glass":
     case "foam":
-      return 6.6;
+      return 8.4;
     case "wood":
-      return 5.8;
+      return 7.0;
     case "metal":
     case "concrete":
-      return 5.2;
+      return 6.2;
     default:
-      return 5.6;
+      return 6.5;
   }
+}
+
+function verticalFragmentSpeedScale(materialId: MaterialId): number {
+  switch (materialId) {
+    case "glass":
+    case "foam":
+      return 0.72;
+    case "wood":
+      return 0.64;
+    default:
+      return 0.58;
+  }
+}
+
+function smallFragmentFlightBoost(size: THREE.Vector3): number {
+  const longestAxis = Math.max(size.x, size.y, size.z);
+  return THREE.MathUtils.clamp(0.42 / Math.max(0.12, longestAxis), 1, 1.55);
 }
 
 function materialDominoFragility(materialId: MaterialId): number {

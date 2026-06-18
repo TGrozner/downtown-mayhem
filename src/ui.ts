@@ -115,7 +115,7 @@ export class GameUI {
         </div>
 
         <div class="hud__goal-grid">
-          <div><span>Mayhem target</span><strong data-role="target-score"></strong></div>
+          <div><span>1-star clear</span><strong data-role="target-score"></strong></div>
           <div><span>Object damage</span><strong data-role="target-damage"></strong></div>
           <div><span>3-star route</span><strong data-role="three-star"></strong></div>
           <div><span>Bonus</span><strong data-role="bonus-goal"></strong></div>
@@ -293,7 +293,7 @@ export class GameUI {
       setText(this.fpsValue, `${state.fps} FPS`);
     }
     setText(this.statusValue, state.status);
-    setText(this.targetScoreValue, `${formatScoreNumber(state.mission.scoreThresholds.twoStar)}+`);
+    setText(this.targetScoreValue, `${formatScoreNumber(state.mission.scoreThresholds.oneStar)}+`);
     setText(this.targetDamageValue, formatScoreNumber(state.mission.targetDamageThreshold));
     setText(this.threeStarValue, `${formatScoreNumber(state.mission.scoreThresholds.threeStar)}+`);
     setText(this.bonusGoalValue, bonusSummary(state.mission));
@@ -472,7 +472,12 @@ function renderScore(state: UIState): string {
       passed: score.targetDamage >= state.mission.targetDamageThreshold
     },
     {
-      label: "Mayhem target",
+      label: "1-star clear",
+      value: `${formatScoreNumber(score.totalScore)} / ${formatScoreNumber(state.mission.scoreThresholds.oneStar)}`,
+      passed: score.totalScore >= state.mission.scoreThresholds.oneStar
+    },
+    {
+      label: "2-star route",
       value: `${formatScoreNumber(score.totalScore)} / ${formatScoreNumber(state.mission.scoreThresholds.twoStar)}`,
       passed: score.totalScore >= state.mission.scoreThresholds.twoStar
     },

@@ -3,6 +3,9 @@ import type { ExplosionAffectedObject, ExplosionResult } from "./destruction";
 import { PhysicsWorld } from "./physics";
 import type { ProjectileDefinition } from "./projectile";
 
+const CHAIN_BASE_POINTS_CAP = 900;
+const CHAIN_AWARDED_POINTS_CAP = 1_200;
+
 export type ScoreEventKind = "target" | "chain" | "chaos";
 
 export interface ScoreEvent {
@@ -50,11 +53,12 @@ export class ShotScoreTracker {
     this.targetDamage += target.points;
     this.collateralChaos += result.materialChaos;
     events.push(...target.events);
+    events.push(...this.collateralEvents(result));
 
     if (result.materialChaos >= 95) {
       events.push({
         kind: "chaos",
-        label: "COLLATERAL",
+        label: "COLLATERAL SURGE",
         points: Math.round(result.materialChaos),
         position: result.origin.clone().add(new THREE.Vector3(0, 0.72, 0))
       });
@@ -62,12 +66,14 @@ export class ShotScoreTracker {
     return events;
   }
 
-  addChainReaction(points: number, position?: THREE.Vector3): ScoreEvent[] {
+  addChainReaction(points: number, position?: THREE.Vector3, label?: string): ScoreEvent[] {
     this.chainReactionCount += 1;
     this.maxChainCombo = Math.max(this.maxChainCombo, this.chainReactionCount);
     const combo = this.chainReactionCount;
-    const multiplier = 1 + Math.min(2.2, (combo - 1) * 0.42);
-    const awarded = Math.round(points * multiplier);
+    const cappedPoints = Math.min(points, CHAIN_BASE_POINTS_CAP);
+    const multiplier = 1 + Math.min(0.9, (combo - 1) * 0.12);
+    const decay = combo <= 3 ? 1 : 1 / (1 + (combo - 3) * 0.18);
+    const awarded = Math.min(CHAIN_AWARDED_POINTS_CAP, Math.round(cappedPoints * multiplier * decay));
     this.chainReactionBonus += awarded;
     if (!position) {
       return [];
@@ -75,7 +81,7 @@ export class ShotScoreTracker {
     return [
       {
         kind: "chain",
-        label: chainLabel(combo),
+        label: label ? chainSourceLabel(label, combo) : chainLabel(combo),
         points: awarded,
         combo,
         position: position.clone().add(new THREE.Vector3(0, 1.1, 0))
@@ -127,11 +133,26 @@ export class ShotScoreTracker {
       if (next > previous) {
         const delta = next - previous;
         points += delta;
-        events.push(scoreEventFromObject("target", "BREAK", delta, object));
+        events.push(scoreEventFromObject("target", objectScoreLabel(object), delta, object));
         this.scoredObjects.set(object.id, next);
       }
     }
     return { points, events: events.sort(sortScoreEvents).slice(0, 7) };
+  }
+
+  private collateralEvents(result: ExplosionResult): ScoreEvent[] {
+    const events: ScoreEvent[] = [];
+    for (const object of result.affectedObjects) {
+      if (object.scoreRole === "target") {
+        continue;
+      }
+      const points = Math.round(object.weightedDamage * (object.fractured ? 0.42 : 0.24));
+      if (points < 18) {
+        continue;
+      }
+      events.push(scoreEventFromObject("chaos", objectScoreLabel(object), points, object));
+    }
+    return events.sort(sortScoreEvents).slice(0, 2);
   }
 }
 
@@ -159,6 +180,68 @@ function chainLabel(combo: number): string {
     return `CHAIN x${combo}`;
   }
   return "CHAIN";
+}
+
+function chainSourceLabel(label: string, combo: number): string {
+  return combo >= 2 ? `${label} x${combo}` : label;
+}
+
+function objectScoreLabel(object: ExplosionAffectedObject): string {
+  if (object.scoreRole === "target") {
+    return object.fractured ? "TARGET BREAK" : "TARGET HIT";
+  }
+  return `${materialLabel(object.materialId)} ${object.fractured ? fracturedVerb(object.materialId) : damagedVerb(object.materialId)}`;
+}
+
+function materialLabel(materialId: ExplosionAffectedObject["materialId"]): string {
+  switch (materialId) {
+    case "glass":
+      return "GLASS";
+    case "metal":
+      return "METAL";
+    case "wood":
+      return "WOOD";
+    case "foam":
+      return "FOAM";
+    case "rubber":
+      return "RUBBER";
+    case "concrete":
+      return "CONCRETE";
+  }
+}
+
+function fracturedVerb(materialId: ExplosionAffectedObject["materialId"]): string {
+  switch (materialId) {
+    case "glass":
+      return "SHATTER";
+    case "metal":
+      return "CRUMPLE";
+    case "wood":
+      return "SPLINTER";
+    case "foam":
+      return "POP";
+    case "rubber":
+      return "RUPTURE";
+    case "concrete":
+      return "CRACK";
+  }
+}
+
+function damagedVerb(materialId: ExplosionAffectedObject["materialId"]): string {
+  switch (materialId) {
+    case "glass":
+      return "RATTLE";
+    case "metal":
+      return "DENT";
+    case "wood":
+      return "CHIP";
+    case "foam":
+      return "BUCKLE";
+    case "rubber":
+      return "BOUNCE";
+    case "concrete":
+      return "CHIP";
+  }
 }
 
 function mayhemRating(totalScore: number): string {

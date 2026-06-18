@@ -42,6 +42,10 @@ const SCORE_SETTLED_SPEED = 1.55;
 const FIRE_MIN_DELAY_MS = 760;
 const FIRE_MAX_DELAY_MS = 1850;
 const MAX_BURNING_HAZARDS = 18;
+const VOLATILE_TRIGGER_LIMIT_BY_DEPTH = [3, 1, 0] as const;
+const CAMERA_FOCUS_MIN_SCORE = 155;
+const CAMERA_FOCUS_LOCK_MS = 1100;
+const CAMERA_FOCUS_DECAY_MS = 3400;
 const CANNON_DECK_OFFSETS = [
   new THREE.Vector3(0, -3.23, 1.9),
   new THREE.Vector3(-3.3, -0.22, 1.9),
@@ -65,12 +69,22 @@ const ARCADE_LEVELS = TEST_CHAMBERS.map(chamberToArcadeLevel);
 
 interface BurningHazard {
   id: number;
+  label: string;
   origin: THREE.Vector3;
   explodeAt: number;
   nextFxAt: number;
   strength: number;
   radius: number;
   materialId: PhysicsObject["materialId"];
+}
+
+interface VolatileHazardProfile {
+  strength: number;
+  radius: number;
+  projectileId: ProjectileId;
+  color: THREE.ColorRepresentation;
+  powerScale: number;
+  sizeScale: number;
 }
 
 class Game {
@@ -127,6 +141,8 @@ class Game {
   private fpsSampleFrames = 0;
   private displayedFps = 0;
   private nextChainCooldownSweep = 0;
+  private spectacleFocusScore = 0;
+  private spectacleFocusUpdatedAt = 0;
   private disposed = false;
 
   constructor() {
@@ -470,6 +486,8 @@ class Game {
     this.triggeredHazards.clear();
     this.burningHazards.clear();
     this.nextChainCooldownSweep = 0;
+    this.spectacleFocusScore = 0;
+    this.spectacleFocusUpdatedAt = 0;
     this.runState.resetAim();
     this.arcadeResult = null;
     this.runSeed = createRunSeed();
@@ -600,6 +618,7 @@ class Game {
       sizeScale: active.sizeScale,
       hitMaterialId: hitObject?.materialId
     });
+    this.focusSpectacleOn(point, result, 160, true);
     const scoreEvents = [
       ...(directResult ? this.applyExplosionResult(directResult, 0, projectile.id === "ignite" ? 1 : 0) : []),
       ...this.applyExplosionResult(result, 0, projectile.id === "ignite" ? 1.35 : projectile.id === "pulse" ? 0.35 : 0),
@@ -613,15 +632,40 @@ class Game {
       powerScale: active.powerScale,
       sizeScale: active.sizeScale,
       hitMaterialId: hitObject?.materialId,
+      impactDirection: directionVector,
       role: "primary"
     });
     this.particles.cityDebrisSpray(point, result.dustColors, 1 + result.fracturedBodies * 0.085);
-    this.cameraRig.spectacle(point);
     this.cameraRig.shake(projectile.id === "gravity" ? 0.78 : 0.52, 0.92);
     this.hitStopTimer = this.settings.motionEffects ? (projectile.id === "gravity" ? 0.09 : 0.065) : 0;
     this.slowMotionTimer = this.settings.motionEffects ? (projectile.id === "gravity" ? 0.72 : 0.58) : 0;
     this.runState.beginSpectacle(performance.now());
     this.status = `${projectile.name} impact: ${(directResult?.fracturedBodies ?? 0) + result.fracturedBodies} fractures, ${result.affectedBodies} objects hit.`;
+  }
+
+  private focusSpectacleOn(point: THREE.Vector3, result: ExplosionResult, bonus = 0, force = false): void {
+    const now = performance.now();
+    const focusScore = explosionFocusScore(result) + bonus;
+    const focusAge = now - this.spectacleFocusUpdatedAt;
+    const decayedScore = this.spectacleFocusScore * Math.exp(-Math.max(0, focusAge) / CAMERA_FOCUS_DECAY_MS);
+    if (!force && focusScore < CAMERA_FOCUS_MIN_SCORE) {
+      this.spectacleFocusScore = decayedScore;
+      return;
+    }
+
+    const isMajorUpgrade = focusScore >= decayedScore * 1.45 + 140;
+    const isSettledUpgrade = focusAge >= CAMERA_FOCUS_LOCK_MS && focusScore >= decayedScore * 0.92 + 50;
+    const canRetarget = force || isMajorUpgrade || isSettledUpgrade;
+    if (!canRetarget) {
+      this.spectacleFocusScore = decayedScore;
+      return;
+    }
+
+    const focus = point.clone();
+    focus.y = Math.max(0.8, Math.min(3.6, focus.y + result.fracturedBodies * 0.025));
+    this.spectacleFocusScore = focusScore;
+    this.spectacleFocusUpdatedAt = now;
+    this.cameraRig.spectacle(focus);
   }
 
   private shouldProjectilePenetrate(active: ActiveProjectile, hitObject: PhysicsObject): boolean {
@@ -670,10 +714,16 @@ class Game {
     });
 
     const retainedSpeed = speed * penetrationRetainedSpeed(active.definition.id, hitObject);
+    const nextPosition = point.clone().add(direction.clone().multiplyScalar(active.radius + 0.34));
     const nextVelocity = direction.clone().multiplyScalar(retainedSpeed);
+    active.object.body.setTranslation({ x: nextPosition.x, y: nextPosition.y, z: nextPosition.z }, true);
     active.object.body.setLinvel({ x: nextVelocity.x, y: nextVelocity.y, z: nextVelocity.z }, true);
+    active.previousPosition.copy(nextPosition);
     this.cameraRig.shake(active.definition.id === "gravity" ? 0.18 : 0.1, 0.22);
-    this.status = `${active.definition.name} pierced ${hitObject.materialId}; continuing through the block.`;
+    this.status =
+      hitObject.materialId === "glass"
+        ? `${active.definition.name} shattered glass and kept going.`
+        : `${active.definition.name} pierced ${hitObject.materialId}; continuing through the block.`;
   }
 
   private playProjectileSpecial(
@@ -732,37 +782,43 @@ class Game {
 
   private triggerVolatileHazards(result: ExplosionResult, cascadeDepth: number): ScoreEvent[] {
     const events: ScoreEvent[] = [];
-    for (const object of result.affectedObjects) {
-      if (!object.fractured || this.triggeredHazards.has(object.id) || !isVolatileHazard(object)) {
-        continue;
-      }
+    const triggerLimit = VOLATILE_TRIGGER_LIMIT_BY_DEPTH[cascadeDepth] ?? 0;
+    if (triggerLimit <= 0) {
+      return events;
+    }
+
+    const candidates = result.affectedObjects
+      .filter((object) => object.fractured && !this.triggeredHazards.has(object.id) && isVolatileHazard(object))
+      .sort(sortVolatileHazards)
+      .slice(0, triggerLimit);
+
+    for (const object of candidates) {
       this.triggeredHazards.add(object.id);
       const origin = object.position.clone().add(new THREE.Vector3(0, 0.22, 0));
-      const isPowerGrid = object.zoneId?.includes("power-grid") ?? false;
-      const strength = isPowerGrid ? 21 : 18;
-      const radius = isPowerGrid ? 2.35 : 2.55;
-      const secondary = this.destruction.explode(origin, strength, radius);
-      this.explosion.play(origin, radius * 1.35, secondary.dustColors, {
-        projectileId: isPowerGrid ? "pulse" : "scatter",
+      const profile = volatileHazardProfile(object);
+      const secondary = this.destruction.explode(origin, profile.strength, profile.radius);
+      this.focusSpectacleOn(origin, secondary, hazardCameraFocusBonus(object));
+      this.explosion.play(origin, profile.radius * 1.35, secondary.dustColors, {
+        projectileId: profile.projectileId,
         result: secondary,
-        powerScale: 0.84,
-        sizeScale: 0.8,
+        powerScale: profile.powerScale,
+        sizeScale: profile.sizeScale,
         hitMaterialId: object.materialId,
         role: "secondary"
       });
-      this.particles.spark(origin, isPowerGrid ? 0x8ff7ff : 0xff4f66, isPowerGrid ? 1.7 : 1.45);
+      this.particles.spark(origin, profile.color, profile.projectileId === "ignite" ? 2.1 : 1.7);
       if (secondary.dustColors.length > 0) {
         this.particles.cityDebrisSpray(origin, secondary.dustColors, 0.42 + secondary.fracturedBodies * 0.08);
       }
       this.audio.playProjectileImpact({
         point: origin,
-        projectileId: "pulse",
+        projectileId: profile.projectileId,
         result: secondary,
-        powerScale: 0.8,
-        sizeScale: 0.8,
+        powerScale: profile.powerScale,
+        sizeScale: profile.sizeScale,
         hitMaterialId: object.materialId
       });
-      events.push(...this.scoreTracker.addChainReaction(Math.max(70, Math.round(secondary.materialChaos * 0.35)), origin));
+      events.push(...this.scoreTracker.addChainReaction(Math.max(70, Math.round(secondary.materialChaos * 0.35)), origin, hazardExplosionLabel(object)));
       events.push(...this.applyExplosionResult(secondary, cascadeDepth + 1));
     }
     return events;
@@ -780,9 +836,16 @@ class Game {
       if (this.burningHazards.has(object.id) || !canIgniteObject(object)) {
         continue;
       }
+      if (object.fractured) {
+        continue;
+      }
+      const sourceObject = this.physics.getObject(object.id);
+      if (!sourceObject) {
+        continue;
+      }
       const energyRatio = object.energy / Math.max(1, object.scoreValue * 0.42);
-      const ignitionChance = THREE.MathUtils.clamp(igniteBias * 0.58 + energyRatio * 0.08 + (object.fractured ? 0.16 : 0), 0, 0.92);
-      if (igniteBias < 0.2 && !object.fractured) {
+      const ignitionChance = THREE.MathUtils.clamp(igniteBias * 0.58 + energyRatio * 0.08, 0, 0.92);
+      if (igniteBias < 0.2) {
         continue;
       }
       if (igniteBias < 0.95 && Math.random() > ignitionChance) {
@@ -791,9 +854,10 @@ class Game {
       const delay = THREE.MathUtils.lerp(FIRE_MAX_DELAY_MS, FIRE_MIN_DELAY_MS, THREE.MathUtils.clamp(igniteBias + energyRatio * 0.18, 0, 1));
       const radius = object.zoneId?.includes("power-grid") ? 2.15 : object.materialId === "foam" ? 2.65 : 2.35;
       const strength = object.materialId === "wood" || object.materialId === "foam" ? 18 : 14;
-      const origin = object.position.clone().add(new THREE.Vector3(0, 0.38, 0));
+      const origin = ignitionOriginForObject(sourceObject);
       this.burningHazards.set(object.id, {
         id: object.id,
+        label: ignitionExplosionLabel(object),
         origin,
         explodeAt: now + delay + Math.random() * 320,
         nextFxAt: now,
@@ -812,6 +876,12 @@ class Game {
     }
     const now = performance.now();
     for (const hazard of this.burningHazards.values()) {
+      const sourceObject = this.physics.getObject(hazard.id);
+      if (!sourceObject) {
+        this.burningHazards.delete(hazard.id);
+        continue;
+      }
+      hazard.origin.copy(ignitionOriginForObject(sourceObject));
       if (now >= hazard.nextFxAt) {
         this.particles.fireLick(hazard.origin, 0.62);
         hazard.nextFxAt = now + 180;
@@ -821,6 +891,7 @@ class Game {
       }
       this.burningHazards.delete(hazard.id);
       const result = this.destruction.explode(hazard.origin, hazard.strength, hazard.radius);
+      this.focusSpectacleOn(hazard.origin, result, 145);
       this.explosion.play(hazard.origin, hazard.radius * 1.24, result.dustColors, {
         projectileId: "ignite",
         result,
@@ -838,7 +909,7 @@ class Game {
         sizeScale: 0.82,
         hitMaterialId: hazard.materialId
       });
-      events.push(...this.scoreTracker.addChainReaction(Math.max(58, Math.round((result.materialChaos + result.structureDamage) * 0.28)), hazard.origin));
+      events.push(...this.scoreTracker.addChainReaction(Math.max(58, Math.round((result.materialChaos + result.structureDamage) * 0.28)), hazard.origin, hazard.label));
       events.push(...this.applyExplosionResult(result, 1, 0.18));
     }
     return events;
@@ -932,7 +1003,7 @@ class Game {
       });
       events.push(...this.applyExplosionResult(result));
       const points = Math.max(45, Math.round(damaged.weightedDamage * 0.85 + relativeSpeed * 8));
-      events.push(...this.scoreTracker.addChainReaction(points, damaged.position));
+      events.push(...this.scoreTracker.addChainReaction(points, damaged.position, chainImpactLabel(damaged)));
       this.particles.spark(origin, 0xffd25c, Math.min(1.4, 0.55 + relativeSpeed * 0.045));
       if (result.dustColors.length > 0) {
         this.particles.cityDebrisSpray(origin, result.dustColors, 0.35 + result.fracturedBodies * 0.04);
@@ -981,7 +1052,7 @@ class Game {
       });
       events.push(...this.applyExplosionResult(result));
       const points = Math.max(22, Math.round(damaged.weightedDamage * 0.45 + impactSpeed * 6));
-      events.push(...this.scoreTracker.addChainReaction(points, damaged.position));
+      events.push(...this.scoreTracker.addChainReaction(points, damaged.position, groundImpactLabel(damaged)));
       if (result.dustColors.length > 0) {
         this.particles.cityDebrisSpray(origin, result.dustColors, 0.22 + result.fracturedBodies * 0.045);
       }
@@ -1174,6 +1245,38 @@ function vectorFromRapier(v: { x: number; y: number; z: number }): THREE.Vector3
   return new THREE.Vector3(v.x, v.y, v.z);
 }
 
+function ignitionOriginForObject(object: PhysicsObject): THREE.Vector3 {
+  const origin = vectorFromRapier(object.body.translation());
+  origin.y += THREE.MathUtils.clamp(object.dimensions.y * 0.42, 0.26, 0.72);
+  return origin;
+}
+
+function explosionFocusScore(result: ExplosionResult): number {
+  const scoreMass = Math.min(190, (result.materialChaos + result.structureDamage) * 0.04);
+  return result.fracturedBodies * 38 + result.affectedBodies * 6 + scoreMass;
+}
+
+function hazardCameraFocusBonus(object: ExplosionAffectedObject): number {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  if (isGasHazard(label, zone)) {
+    return 190;
+  }
+  if (isEnergyPlantHazard(label, zone)) {
+    return 170;
+  }
+  if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
+    return 135;
+  }
+  if (zone.includes("hazard-relay") || label.includes("shock canister") || label.includes("canister")) {
+    return 115;
+  }
+  if (zone.includes("moving-vehicles")) {
+    return 100;
+  }
+  return 70;
+}
+
 function quaternionFromRapier(q: { x: number; y: number; z: number; w: number }): THREE.Quaternion {
   return new THREE.Quaternion(q.x, q.y, q.z, q.w);
 }
@@ -1210,10 +1313,157 @@ function isVolatileHazard(object: ExplosionAffectedObject): boolean {
   return (
     zone.includes("hazard-relay") ||
     zone.includes("power-grid") ||
+    zone.includes("energy-plant") ||
+    zone.includes("gas-station") ||
+    zone.includes("fuel") ||
+    zone.includes("gas") ||
     zone.includes("moving-vehicles") ||
     label.includes("shock canister") ||
-    label.includes("power-grid")
+    label.includes("power-grid") ||
+    label.includes("energy plant") ||
+    label.includes("gas pump") ||
+    label.includes("gas station")
   );
+}
+
+function volatileHazardProfile(object: ExplosionAffectedObject): VolatileHazardProfile {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  if (isGasHazard(label, zone)) {
+    return {
+      strength: 32,
+      radius: 3.35,
+      projectileId: "ignite",
+      color: 0xff7a35,
+      powerScale: 1.08,
+      sizeScale: 1.08
+    };
+  }
+  if (isEnergyPlantHazard(label, zone)) {
+    return {
+      strength: 28,
+      radius: 3.05,
+      projectileId: "pulse",
+      color: 0x8ff7ff,
+      powerScale: 1.0,
+      sizeScale: 1.0
+    };
+  }
+  if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
+    return {
+      strength: 21,
+      radius: 2.35,
+      projectileId: "pulse",
+      color: 0x8ff7ff,
+      powerScale: 0.84,
+      sizeScale: 0.8
+    };
+  }
+  return {
+    strength: 18,
+    radius: 2.55,
+    projectileId: "scatter",
+    color: 0xff4f66,
+    powerScale: 0.84,
+    sizeScale: 0.8
+  };
+}
+
+function sortVolatileHazards(a: ExplosionAffectedObject, b: ExplosionAffectedObject): number {
+  return volatileHazardPriority(b) - volatileHazardPriority(a) || b.energy - a.energy;
+}
+
+function volatileHazardPriority(object: ExplosionAffectedObject): number {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  if (isGasHazard(label, zone)) {
+    return 120;
+  }
+  if (isEnergyPlantHazard(label, zone)) {
+    return 110;
+  }
+  if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
+    return 86;
+  }
+  if (zone.includes("hazard-relay") || label.includes("shock canister") || label.includes("canister")) {
+    return 76;
+  }
+  if (zone.includes("moving-vehicles")) {
+    return 62;
+  }
+  return 40;
+}
+
+function hazardExplosionLabel(object: ExplosionAffectedObject): string {
+  return `${hazardSourceLabel(object)} BLAST`;
+}
+
+function ignitionExplosionLabel(object: ExplosionAffectedObject): string {
+  return `${hazardSourceLabel(object)} IGNITES`;
+}
+
+function chainImpactLabel(object: ExplosionAffectedObject): string {
+  return `${scoreMaterialLabel(object.materialId)} ${object.fractured ? "BREAKS" : "HIT"}`;
+}
+
+function groundImpactLabel(object: ExplosionAffectedObject): string {
+  return `${scoreMaterialLabel(object.materialId)} GROUND HIT`;
+}
+
+function hazardSourceLabel(object: ExplosionAffectedObject): string {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  if (isGasHazard(label, zone)) {
+    return "GAS LINE";
+  }
+  if (isEnergyPlantHazard(label, zone)) {
+    return "ENERGY PLANT";
+  }
+  if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
+    return "POWER RELAY";
+  }
+  if (label.includes("shock canister") || label.includes("canister")) {
+    return "CANISTER";
+  }
+  if (zone.includes("moving-vehicles") || label.includes("vehicle") || label.includes("van") || label.includes("cart")) {
+    return "VEHICLE";
+  }
+  if (zone.includes("hazard-relay") || label.includes("relay")) {
+    return "HAZARD RELAY";
+  }
+  return `${scoreMaterialLabel(object.materialId)} HAZARD`;
+}
+
+function isEnergyPlantHazard(label: string, zone: string): boolean {
+  return zone.includes("energy-plant") || label.includes("energy plant");
+}
+
+function isGasHazard(label: string, zone: string): boolean {
+  return [label, zone].some(
+    (value) =>
+      value.includes("gas") ||
+      value.includes("fuel") ||
+      value.includes("pipe") ||
+      value.includes("conduit") ||
+      value.includes("pipeline")
+  );
+}
+
+function scoreMaterialLabel(materialId: ExplosionAffectedObject["materialId"]): string {
+  switch (materialId) {
+    case "glass":
+      return "GLASS";
+    case "metal":
+      return "METAL";
+    case "wood":
+      return "WOOD";
+    case "foam":
+      return "FOAM";
+    case "rubber":
+      return "RUBBER";
+    case "concrete":
+      return "CONCRETE";
+  }
 }
 
 function canIgniteObject(object: ExplosionAffectedObject): boolean {
@@ -1227,6 +1477,10 @@ function canIgniteObject(object: ExplosionAffectedObject): boolean {
     object.materialId === "rubber" ||
     zone.includes("hazard") ||
     zone.includes("power-grid") ||
+    zone.includes("energy-plant") ||
+    zone.includes("gas-station") ||
+    zone.includes("fuel") ||
+    zone.includes("gas") ||
     zone.includes("moving-vehicles")
   );
 }
@@ -1267,10 +1521,10 @@ function projectileCollisionTarget(active: ActiveProjectile, collision: { first:
 
 function penetrationImpactScale(projectileId: ProjectileId, target: PhysicsObject): number {
   if (target.materialId === "glass") {
-    return projectileId === "pulse" ? 0.38 : 0.32;
+    return projectileId === "pulse" ? 0.86 : projectileId === "gravity" ? 0.54 : 0.48;
   }
   if (target.materialId === "foam") {
-    return 0.26;
+    return projectileId === "gravity" ? 0.48 : 0.38;
   }
   return 0.22;
 }

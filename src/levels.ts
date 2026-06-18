@@ -54,24 +54,24 @@ export const TEST_CHAMBERS: TestChamber[] = [
     id: "hazard-junction",
     name: "Hazard Junction",
     description: "A dense hazard city packed below the high siege battery.",
-    objective: "Build a maximum Mayhem Score across the orange hazard core, transformer relays, vehicles, cargo, and power lines.",
-    chaosBrief: "Everything is a target. Every break, bounce, relay detonation, and moving wreck adds to the route.",
+    objective: "Pick a chain starter: energy plant, gas station, transformer relays, or a tower collapse route.",
+    chaosBrief: "Recognizable hazard buildings hit harder, but only a few can cascade per wave.",
     cannonPosition: new THREE.Vector3(0, 6.08, 24.55),
-    defaultAimPoint: new THREE.Vector3(0, 0.16, -3.4),
+    defaultAimPoint: new THREE.Vector3(-1.72, 0.16, -3.35),
     cameraTarget: new THREE.Vector3(0, 0.9, -2.6),
     mission: {
       arc: "object-destruction",
       order: 1,
       targetZone: "hazard-core",
       scoreThresholds: {
-        oneStar: 2_200_000,
-        twoStar: 3_000_000,
-        threeStar: 3_900_000
+        oneStar: 12_000,
+        twoStar: 55_000,
+        threeStar: 125_000
       },
-      targetDamageThreshold: 10_000,
+      targetDamageThreshold: 75,
       bonusThreshold: { metric: "chainReactionCount", minimum: 2 },
-      bonusObjective: "Start at least two secondary hits through the foundry, transformer relays, cargo, or street grid.",
-      briefingHint: "The densest score is no longer a clean route: break the core, kick vehicles into relays, and let power-grid debris travel."
+      bonusObjective: "Start at least two secondary hits from the energy plant, gas line, transformer relays, or vehicle grid.",
+      briefingHint: "Aim choice matters: gas is wide and low, the energy plant is compact and hot, towers create debris routes."
     },
     setup: (context) => {
       addCityGround(context);
@@ -84,6 +84,8 @@ export const TEST_CHAMBERS: TestChamber[] = [
       spawnVacantLotInfill(context);
       spawnHazardRelays(context);
       spawnPowerGrid(context);
+      spawnStrategicHazards(context);
+      spawnRadioTower(context);
       spawnStreetSetpieces(context);
     }
   },
@@ -626,7 +628,7 @@ function spawnInfillCityBlocks(context: LevelContext): void {
     materialId: "concrete",
     position: new THREE.Vector3(-7.12, 0, -7.35),
     size: new THREE.Vector3(0.48, 0.48, 0.52),
-    floors: 3,
+    floors: 4,
     columns: 3,
     scoreRole: "neutral",
     zoneId: "north-row",
@@ -640,7 +642,7 @@ function spawnInfillCityBlocks(context: LevelContext): void {
     materialId: "glass",
     position: new THREE.Vector3(3.55, 0, -7.25),
     size: new THREE.Vector3(0.46, 0.64, 0.48),
-    floors: 3,
+    floors: 4,
     columns: 4,
     scoreRole: "neutral",
     zoneId: "transit-row",
@@ -668,7 +670,7 @@ function spawnInfillCityBlocks(context: LevelContext): void {
     materialId: "concrete",
     position: new THREE.Vector3(-5.85, 0, 6.7),
     size: new THREE.Vector3(0.54, 0.5, 0.56),
-    floors: 3,
+    floors: 4,
     columns: 4,
     scoreRole: "neutral",
     zoneId: "south-ribbon",
@@ -708,7 +710,7 @@ function spawnInfillCityBlocks(context: LevelContext): void {
     materialId: "concrete",
     position: new THREE.Vector3(11.35, 0, -5.55),
     size: new THREE.Vector3(0.54, 0.5, 0.54),
-    floors: 3,
+    floors: 4,
     columns: 4,
     scoreRole: "neutral",
     zoneId: "east-perimeter",
@@ -736,7 +738,7 @@ function spawnInfillCityBlocks(context: LevelContext): void {
     materialId: "glass",
     position: new THREE.Vector3(10.97, 0, 6.65),
     size: new THREE.Vector3(0.48, 0.6, 0.48),
-    floors: 3,
+    floors: 4,
     columns: 3,
     scoreRole: "neutral",
     zoneId: "battery-offices",
@@ -1113,7 +1115,7 @@ function spawnCascadeHighRiseCorridors(context: LevelContext): void {
       materialId: "metal",
       position: new THREE.Vector3(2.65, 0, 6.05),
       size: new THREE.Vector3(0.5, 0.52, 0.56),
-      floors: 5,
+      floors: 6,
       columns: 5,
       scoreRole: "neutral",
       zoneId: "battery-canyon",
@@ -1126,7 +1128,7 @@ function spawnCascadeHighRiseCorridors(context: LevelContext): void {
       materialId: "wood",
       position: new THREE.Vector3(-7.8, 0, -3.85),
       size: new THREE.Vector3(0.52, 0.52, 0.56),
-      floors: 5,
+      floors: 6,
       columns: 5,
       scoreRole: "neutral",
       zoneId: "west-impact",
@@ -1163,7 +1165,7 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "glass",
       position: new THREE.Vector3(2.7, 0, -10.45),
       size: new THREE.Vector3(0.44, 0.68, 0.46),
-      floors: 5,
+      floors: 6,
       columns: 6,
       scoreRole: "neutral",
       zoneId: "north-blindside",
@@ -1176,7 +1178,7 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "concrete",
       position: new THREE.Vector3(-6.9, 0, -10.65),
       size: new THREE.Vector3(0.52, 0.54, 0.56),
-      floors: 5,
+      floors: 6,
       columns: 5,
       scoreRole: "neutral",
       zoneId: "northwest-slabs",
@@ -1189,7 +1191,7 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "metal",
       position: new THREE.Vector3(7.9, 0, -10.25),
       size: new THREE.Vector3(0.5, 0.5, 0.58),
-      floors: 4,
+      floors: 6,
       columns: 6,
       scoreRole: "neutral",
       zoneId: "northeast-service",
@@ -1202,7 +1204,7 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "concrete",
       position: new THREE.Vector3(-14.15, 0, -2.45),
       size: new THREE.Vector3(0.52, 0.54, 0.56),
-      floors: 5,
+      floors: 6,
       columns: 6,
       scoreRole: "neutral",
       zoneId: "west-dead-zone",
@@ -1216,7 +1218,7 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "foam",
       position: new THREE.Vector3(-14.05, 0, 5.7),
       size: new THREE.Vector3(0.48, 0.42, 0.5),
-      floors: 4,
+      floors: 5,
       columns: 6,
       scoreRole: "neutral",
       zoneId: "west-empty-lot",
@@ -1230,7 +1232,7 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "glass",
       position: new THREE.Vector3(16.15, 0, -0.25),
       size: new THREE.Vector3(0.44, 0.66, 0.46),
-      floors: 5,
+      floors: 6,
       columns: 6,
       scoreRole: "neutral",
       zoneId: "east-dead-zone",
@@ -1244,7 +1246,7 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "wood",
       position: new THREE.Vector3(11.1, 0, 17.2),
       size: new THREE.Vector3(0.52, 0.5, 0.56),
-      floors: 5,
+      floors: 6,
       columns: 6,
       scoreRole: "neutral",
       zoneId: "southeast-condos",
@@ -1257,13 +1259,125 @@ function spawnVacantLotInfill(context: LevelContext): void {
       materialId: "concrete",
       position: new THREE.Vector3(-10.35, 0, 17.0),
       size: new THREE.Vector3(0.52, 0.54, 0.56),
-      floors: 5,
+      floors: 6,
       columns: 6,
       scoreRole: "neutral",
       zoneId: "southwest-condos",
       scoreValue: 34,
       style: "apartment",
       stagger: -0.06
+    },
+    {
+      label: "Northwest corner towers",
+      materialId: "concrete",
+      position: new THREE.Vector3(-12.25, 0, -10.05),
+      size: new THREE.Vector3(0.52, 0.56, 0.56),
+      floors: 6,
+      columns: 4,
+      scoreRole: "neutral",
+      zoneId: "northwest-corner",
+      scoreValue: 34,
+      style: "apartment",
+      stagger: 0.05,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "Northeast rim offices",
+      materialId: "glass",
+      position: new THREE.Vector3(13.75, 0, -10.3),
+      size: new THREE.Vector3(0.46, 0.66, 0.48),
+      floors: 6,
+      columns: 4,
+      scoreRole: "neutral",
+      zoneId: "northeast-rim",
+      scoreValue: 36,
+      style: "glassTower",
+      stagger: -0.04,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "West lower terrace",
+      materialId: "metal",
+      position: new THREE.Vector3(-14.0, 0, 10.9),
+      size: new THREE.Vector3(0.52, 0.48, 0.58),
+      floors: 6,
+      columns: 4,
+      scoreRole: "neutral",
+      zoneId: "west-lower-terrace",
+      scoreValue: 32,
+      style: "warehouse",
+      stagger: 0.04,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "East lower terrace",
+      materialId: "concrete",
+      position: new THREE.Vector3(15.15, 0, 12.1),
+      size: new THREE.Vector3(0.52, 0.56, 0.56),
+      floors: 6,
+      columns: 4,
+      scoreRole: "neutral",
+      zoneId: "east-lower-terrace",
+      scoreValue: 34,
+      style: "apartment",
+      stagger: -0.05,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "Northwest broadcast slab",
+      materialId: "metal",
+      position: new THREE.Vector3(-15.7, 0, -14.2),
+      size: new THREE.Vector3(0.48, 0.62, 0.52),
+      floors: 7,
+      columns: 3,
+      scoreRole: "neutral",
+      zoneId: "northwest-broadcast",
+      scoreValue: 36,
+      style: "warehouse",
+      stagger: 0.03,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "Northeast hotel stack",
+      materialId: "glass",
+      position: new THREE.Vector3(15.95, 0, -14.0),
+      size: new THREE.Vector3(0.44, 0.72, 0.46),
+      floors: 7,
+      columns: 3,
+      scoreRole: "neutral",
+      zoneId: "northeast-hotel",
+      scoreValue: 38,
+      style: "glassTower",
+      stagger: -0.03,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "Southwest civic stack",
+      materialId: "concrete",
+      position: new THREE.Vector3(-16.0, 0, 14.95),
+      size: new THREE.Vector3(0.54, 0.58, 0.58),
+      floors: 7,
+      columns: 3,
+      scoreRole: "neutral",
+      zoneId: "southwest-civic",
+      scoreValue: 36,
+      style: "apartment",
+      stagger: -0.04,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "Southeast data stack",
+      materialId: "wood",
+      position: new THREE.Vector3(16.3, 0, 16.35),
+      size: new THREE.Vector3(0.5, 0.56, 0.54),
+      floors: 7,
+      columns: 3,
+      scoreRole: "neutral",
+      zoneId: "southeast-data",
+      scoreValue: 34,
+      style: "utility",
+      stagger: 0.04,
+      rotationY: Math.PI * 0.5
     }
   ];
 
@@ -1284,6 +1398,188 @@ function spawnHazardRelays(context: LevelContext): void {
 
   for (const [type, label, x, z, width, height, depth, rotationY] of relays) {
     addHazardRelay(context, type, label, new THREE.Vector3(x, height * 0.5, z), new THREE.Vector3(width, height, depth), rotationY);
+  }
+}
+
+function spawnStrategicHazards(context: LevelContext): void {
+  addStrategicHazardBox(context, {
+    label: "Energy plant core",
+    materialId: "glass",
+    position: new THREE.Vector3(-1.72, 0.48, -3.35),
+    size: new THREE.Vector3(0.86, 0.96, 0.72),
+    zoneId: "energy-plant",
+    scoreValue: 520,
+    kind: "electric"
+  });
+  addStrategicHazardBox(context, {
+    label: "Energy plant capacitor bank",
+    materialId: "metal",
+    position: new THREE.Vector3(-2.72, 0.34, -3.95),
+    size: new THREE.Vector3(0.78, 0.68, 0.52),
+    zoneId: "energy-plant",
+    scoreValue: 380,
+    kind: "electric",
+    rotationY: Math.PI * 0.08
+  });
+  addStrategicHazardBox(context, {
+    label: "Gas station canopy",
+    materialId: "foam",
+    position: new THREE.Vector3(6.15, 0.28, 3.75),
+    size: new THREE.Vector3(1.65, 0.56, 0.9),
+    zoneId: "gas-station fuel-line",
+    scoreValue: 420,
+    kind: "combustible",
+    rotationY: -Math.PI * 0.04
+  });
+  for (const x of [5.55, 6.15, 6.75]) {
+    addStrategicHazardBox(context, {
+      label: "Gas pump",
+      materialId: "rubber",
+      position: new THREE.Vector3(x, 0.32, 3.2),
+      size: new THREE.Vector3(0.22, 0.64, 0.26),
+      zoneId: "gas-station fuel-pump",
+      scoreValue: 160,
+      kind: "combustible"
+    });
+  }
+}
+
+function addStrategicHazardBox(
+  context: LevelContext,
+  options: {
+    label: string;
+    materialId: MaterialId;
+    position: THREE.Vector3;
+    size: THREE.Vector3;
+    zoneId: string;
+    scoreValue: number;
+    kind: "electric" | "combustible" | "explosive";
+    rotationY?: number;
+  }
+): void {
+  const material = context.materials.get(options.materialId);
+  const position = alignCityObjectToRoadEdges(options.position, options.size, options.rotationY ?? 0);
+  const object = context.physics.addDynamicBox({
+    label: options.label,
+    material,
+    renderMaterial: roleRenderMaterial(context.materials, options.materialId, "target"),
+    position,
+    size: options.size,
+    rotation: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, options.rotationY ?? 0, 0)),
+    category: "structure",
+    scoreRole: "target",
+    zoneId: options.zoneId,
+    canFracture: true,
+    destructible: true,
+    scoreValue: options.scoreValue,
+    chainSource: true,
+    restitution: options.kind === "combustible" ? 0.18 : 0.1,
+    linearDamping: 0.1,
+    angularDamping: 0.22,
+    ccd: true
+  });
+  decorateHazardIndicator(object.mesh, { size: options.size, kind: options.kind });
+  object.mesh.userData.disposeMaterial = true;
+}
+
+function spawnRadioTower(context: LevelContext): void {
+  const anchor = alignCityObjectToRoadEdges(new THREE.Vector3(-15.4, 0, -16.2), new THREE.Vector3(1.25, 4.65, 1.25));
+  const mastMaterial = context.materials.get("metal");
+  const baseMaterial = context.materials.get("concrete");
+  const mastRenderMaterial = new THREE.MeshStandardMaterial({
+    color: 0x85949b,
+    roughness: 0.42,
+    metalness: 0.72,
+    emissive: 0x10242c,
+    emissiveIntensity: 0.18,
+    map: materialAtlasTile(10)
+  });
+  const base = context.physics.addDynamicBox({
+    label: "Northwest radio tower base",
+    material: baseMaterial,
+    renderMaterial: roleRenderMaterial(context.materials, "concrete", "target"),
+    position: new THREE.Vector3(anchor.x, 0.28, anchor.z),
+    size: new THREE.Vector3(1.08, 0.56, 1.08),
+    category: "structure",
+    scoreRole: "target",
+    zoneId: "radio-tower power-grid",
+    canFracture: true,
+    destructible: true,
+    bodyType: "fixed",
+    chainSource: true,
+    scoreValue: 620
+  });
+  base.mesh.userData.disposeMaterial = true;
+  decorateHazardIndicator(base.mesh, { size: base.dimensions, kind: "electric" });
+
+  for (let level = 0; level < 5; level += 1) {
+    const height = level === 4 ? 0.88 : 0.72;
+    const y = 0.58 + level * 0.72 + height * 0.5;
+    const segment = context.physics.addDynamicBox({
+      label: "Northwest radio tower mast",
+      material: mastMaterial,
+      renderMaterial: mastRenderMaterial.clone(),
+      position: new THREE.Vector3(anchor.x, y, anchor.z),
+      size: new THREE.Vector3(0.28, height, 0.28),
+      category: "structure",
+      scoreRole: "target",
+      zoneId: "radio-tower power-grid",
+      canFracture: true,
+      destructible: true,
+      bodyType: "fixed",
+      chainSource: true,
+      scoreValue: level === 4 ? 260 : 210
+    });
+    segment.mesh.userData.disposeMaterial = true;
+    decorateRadioTowerSegment(segment.mesh, level, height);
+  }
+}
+
+function decorateRadioTowerSegment(mesh: THREE.Mesh, level: number, height: number): void {
+  const diagonalMaterial = new THREE.MeshStandardMaterial({
+    color: 0xe8f6ff,
+    roughness: 0.38,
+    metalness: 0.68,
+    emissive: 0x0b3a4a,
+    emissiveIntensity: 0.18,
+    map: materialAtlasTile(10)
+  });
+  for (const rotationZ of [Math.PI * 0.25, -Math.PI * 0.25]) {
+    const brace = new THREE.Mesh(new THREE.BoxGeometry(0.055, height * 1.18, 0.055), diagonalMaterial.clone());
+    brace.name = "radio tower diagonal brace";
+    brace.rotation.z = rotationZ;
+    brace.position.y = 0;
+    brace.userData.disposeMaterial = true;
+    mesh.add(brace);
+  }
+
+  const dishMaterial = new THREE.MeshStandardMaterial({
+    color: 0xcad5d8,
+    roughness: 0.48,
+    metalness: 0.42,
+    map: materialAtlasTile(6)
+  });
+  const dish = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.08, 0.32), dishMaterial);
+  dish.name = "radio tower receiver dish";
+  dish.position.set(level % 2 === 0 ? 0.42 : -0.42, height * 0.18, 0);
+  dish.rotation.z = level % 2 === 0 ? -0.22 : 0.22;
+  dish.userData.disposeMaterial = true;
+  mesh.add(dish);
+
+  if (level === 4) {
+    const beaconMaterial = new THREE.MeshBasicMaterial({ color: 0xff405f });
+    const beacon = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.18), beaconMaterial);
+    beacon.name = "radio tower red beacon";
+    beacon.position.set(0, height * 0.62, 0);
+    beacon.userData.disposeMaterial = true;
+    mesh.add(beacon);
+
+    const antennaMaterial = new THREE.MeshStandardMaterial({ color: 0xf2f7ff, roughness: 0.4, metalness: 0.72, map: materialAtlasTile(10) });
+    const antenna = new THREE.Mesh(new THREE.BoxGeometry(0.055, 1.1, 0.055), antennaMaterial);
+    antenna.name = "radio tower antenna";
+    antenna.position.set(0, height * 0.95, 0);
+    antenna.userData.disposeMaterial = true;
+    mesh.add(antenna);
   }
 }
 
@@ -1599,6 +1895,8 @@ function addCityGround(context: LevelContext): void {
   addGroundPanel("target zone", 0, -2.45, 6.35, 5.35, 0xff6733, 0.34);
   addGroundPanel("west relay hazard zone", -5.4, -4.65, 4.25, 3.45, 0xff8f38, 0.28);
   addGroundPanel("east relay hazard zone", 5.15, 2.35, 4.4, 3.45, 0xff8f38, 0.28);
+  addGroundPanel("energy plant hazard zone", -1.9, -3.6, 2.65, 2.0, 0x7ee8ff, 0.28);
+  addGroundPanel("gas station hazard zone", 6.15, 3.55, 2.65, 1.9, 0xff4f66, 0.24);
 
   for (const z of [-7.5, -4.55, 1.8, 5.05]) {
     addGroundPanel("road marking", 0, z, 0.12, 0.75, 0xf0c96a, 0.78);
@@ -1703,6 +2001,16 @@ function spawnStreetSetpieces(context: LevelContext): void {
   addCityVehicle(context, "East courier pod", new THREE.Vector3(9.86, 0.28, 6.8), new THREE.Vector3(0.36, 0.32, 0.64), 0x87f0ff, 0, undefined, trafficLoop(BATTERY_TRAFFIC_LOOP_OPPOSITE, 0.92, 2));
   addCityVehicle(context, "Battery tram husk", new THREE.Vector3(6.6, 0.34, 8.12), new THREE.Vector3(0.58, 0.45, 1.08), 0xffd66b, -Math.PI * 0.5, undefined, trafficLoop(BATTERY_TRAFFIC_LOOP, 0.92, 2));
   addCityVehicle(context, "South depot van", new THREE.Vector3(-0.42, 0.33, 7.2), new THREE.Vector3(0.54, 0.43, 0.96), 0xb2c0c8, Math.PI, undefined, trafficLoop(BATTERY_TRAFFIC_LOOP_OPPOSITE, 0.92, 0));
+  addCityVehicle(context, "Fuel tanker truck", new THREE.Vector3(10.34, 0.36, -5.65), new THREE.Vector3(0.54, 0.44, 1.18), 0xffd66b, 0, undefined, trafficLoop(NORTH_TRAFFIC_LOOP, 0.82, 1), {
+    zoneId: "moving-fuel-tanker gas-line",
+    scoreValue: 280,
+    hazardKind: "combustible"
+  });
+  addCityVehicle(context, "Fuel tanker truck", new THREE.Vector3(-0.42, 0.36, 8.12), new THREE.Vector3(0.54, 0.44, 1.18), 0xffd66b, Math.PI, undefined, trafficLoop(BATTERY_TRAFFIC_LOOP_OPPOSITE, 0.78, 3), {
+    zoneId: "moving-fuel-tanker gas-line",
+    scoreValue: 280,
+    hazardKind: "combustible"
+  });
 
   for (const [x, z] of [
     [-7.0, -7.1],
@@ -1755,7 +2063,12 @@ function addCityVehicle(
   accent: THREE.ColorRepresentation,
   rotationY = 0,
   linearVelocity?: THREE.Vector3,
-  route?: TrafficRoute
+  route?: TrafficRoute,
+  options: {
+    zoneId?: string;
+    scoreValue?: number;
+    hazardKind?: "electric" | "combustible" | "explosive";
+  } = {}
 ): void {
   const material = context.materials.get("metal");
   const renderMaterial = context.materials.getRenderMaterial("metal").clone();
@@ -1772,10 +2085,10 @@ function addCityVehicle(
     rotation: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rotationY, 0)),
     category: "structure",
     scoreRole: "target",
-    zoneId: "moving-vehicles",
+    zoneId: options.zoneId ?? "moving-vehicles",
     canFracture: true,
     destructible: true,
-    scoreValue: 46,
+    scoreValue: options.scoreValue ?? 46,
     chainSource: true,
     linearVelocity: linearVelocity ?? (route ? trafficInitialVelocity(route) : undefined),
     density: 1.35,
@@ -1787,6 +2100,9 @@ function addCityVehicle(
   });
   object.mesh.userData.disposeMaterial = true;
   decorateCityVehicle(object.mesh, { size, accent });
+  if (options.hazardKind) {
+    decorateHazardIndicator(object.mesh, { size, kind: options.hazardKind });
+  }
 }
 
 function trafficInitialVelocity(route: TrafficRoute): THREE.Vector3 {
@@ -1931,21 +2247,12 @@ function addStreetLight(context: LevelContext, x: number, z: number): void {
   });
   pole.mesh.userData.disposeMaterial = true;
 
-  const lamp = context.physics.addDynamicBox({
-    label: "street light lamp",
-    material: context.materials.get("glass"),
-    renderMaterial: new THREE.MeshBasicMaterial({ color: 0xffdf8f, transparent: true, opacity: 0.92 }),
-    position: new THREE.Vector3(basePosition.x + 0.13, 1.45, basePosition.z),
-    size: new THREE.Vector3(0.32, 0.08, 0.18),
-    category: "structure",
-    scoreRole: "neutral",
-    zoneId: "street",
-    canFracture: true,
-    destructible: true,
-    bodyType: "fixed",
-    scoreValue: 6
-  });
-  lamp.mesh.userData.disposeMaterial = true;
+  const lampMaterial = new THREE.MeshBasicMaterial({ color: 0xffdf8f, transparent: true, opacity: 0.92 });
+  const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.08, 0.18), lampMaterial);
+  lamp.name = "street light lamp";
+  lamp.position.set(0.13, 0.73, 0);
+  lamp.userData.disposeMaterial = true;
+  pole.mesh.add(lamp);
 
   const glowMaterial = new THREE.MeshBasicMaterial({
     color: 0xffc86b,
@@ -1957,15 +2264,15 @@ function addStreetLight(context: LevelContext, x: number, z: number): void {
   });
   const glowPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.32), glowMaterial);
   glowPlane.name = "street light fake glow";
-  glowPlane.position.set(basePosition.x + 0.13, 1.45, basePosition.z);
+  glowPlane.position.set(0.13, 0.73, 0);
   glowPlane.renderOrder = 3;
   glowPlane.userData.disposeMaterial = true;
-  context.addDecoration(glowPlane);
+  pole.mesh.add(glowPlane);
 
   if (Math.abs(x) < 8 && z > -7 && z < 7) {
     const glow = new THREE.PointLight(0xffc86b, 0.32, 3.2, 2);
-    glow.position.set(basePosition.x + 0.13, 1.45, basePosition.z);
-    context.addDecoration(glow);
+    glow.position.set(0.13, 0.73, 0);
+    pole.mesh.add(glow);
   }
 }
 

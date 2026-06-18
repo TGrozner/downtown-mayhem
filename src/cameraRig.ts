@@ -2,10 +2,10 @@ import * as THREE from "three";
 
 type CameraMode = "cannon" | "projectile" | "spectacle";
 
-const SPECTACLE_RADIUS = 14.5;
-const SPECTACLE_RADIUS_PORTRAIT = 24;
-const SPECTACLE_HEIGHT = 7.4;
-const SPECTACLE_HEIGHT_PORTRAIT = 13.2;
+const SPECTACLE_RADIUS = 16.2;
+const SPECTACLE_RADIUS_PORTRAIT = 31;
+const SPECTACLE_HEIGHT = 8.2;
+const SPECTACLE_HEIGHT_PORTRAIT = 17.5;
 const DEFAULT_CANNON_ANCHOR = new THREE.Vector3(0, 6.9, 24.55);
 const DEFAULT_CITY_TARGET = new THREE.Vector3(0, 0.9, -2.6);
 
@@ -95,19 +95,21 @@ export class CameraRig {
 
     if (this.mode === "spectacle") {
       this.spectacleYaw += deltaSeconds * 0.34;
+      this.currentTarget.lerp(this.desiredTarget, 1 - Math.exp(-deltaSeconds * 2.2));
       const portrait = this.camera.aspect < 0.75;
       const radius = portrait ? SPECTACLE_RADIUS_PORTRAIT : SPECTACLE_RADIUS;
       const height = portrait ? SPECTACLE_HEIGHT_PORTRAIT : SPECTACLE_HEIGHT;
       this.desiredPosition.set(
-        this.desiredTarget.x + Math.sin(this.spectacleYaw) * radius,
-        this.desiredTarget.y + height,
-        this.desiredTarget.z + Math.cos(this.spectacleYaw) * radius
+        this.currentTarget.x + Math.sin(this.spectacleYaw) * radius,
+        this.currentTarget.y + height,
+        this.currentTarget.z + Math.cos(this.spectacleYaw) * radius
       );
+      this.camera.position.lerp(this.desiredPosition, 1 - Math.exp(-deltaSeconds * 2.15));
+    } else {
+      const stiffness = this.mode === "projectile" ? 7.5 : 4.6;
+      this.camera.position.lerp(this.desiredPosition, 1 - Math.exp(-deltaSeconds * stiffness));
+      this.currentTarget.lerp(this.desiredTarget, 1 - Math.exp(-deltaSeconds * stiffness));
     }
-
-    const stiffness = this.mode === "projectile" ? 7.5 : 4.6;
-    this.camera.position.lerp(this.desiredPosition, 1 - Math.exp(-deltaSeconds * stiffness));
-    this.currentTarget.lerp(this.desiredTarget, 1 - Math.exp(-deltaSeconds * stiffness));
     this.camera.lookAt(this.currentTarget);
 
     if (this.shakeTime > 0 && this.shakeDuration > 0) {
@@ -128,7 +130,7 @@ export class CameraRig {
   }
 
   resize(width: number, height: number): void {
-    this.camera.fov = height > width ? 62 : 60;
+    this.camera.fov = height > width ? 70 : 62;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelRatioCap));
