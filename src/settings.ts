@@ -19,9 +19,9 @@ export interface SettingsStorage {
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettings = {
-  graphicsQuality: "balanced",
-  rendererBackend: "auto",
-  antialias: false,
+  graphicsQuality: "cinematic",
+  rendererBackend: "webgl",
+  antialias: true,
   masterVolume: 0.84,
   cameraShake: 0.78,
   motionEffects: true,

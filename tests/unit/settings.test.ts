@@ -11,6 +11,14 @@ import {
 } from "../../src/settings";
 
 describe("game settings", () => {
+  test("defaults to the stable cinematic WebGL profile", () => {
+    expect(DEFAULT_GAME_SETTINGS).toMatchObject({
+      graphicsQuality: "cinematic",
+      rendererBackend: "webgl",
+      antialias: true
+    });
+  });
+
   test("sanitizes unknown and out-of-range values", () => {
     expect(
       sanitizeGameSettings({

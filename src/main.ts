@@ -104,6 +104,18 @@ const RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES = 72;
 const RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES = 260;
 const RENDER_WARMUP_MAX_DURATION_MS = 6_000;
 const RENDER_WARMUP_POST_CLEANUP_MAX_DURATION_MS = 3_000;
+const FAST_RENDER_WARMUP_BRUTAL_PASSES = 1;
+const FAST_RENDER_WARMUP_FRAMES_PER_BRUTAL_PASS = 4;
+const FAST_RENDER_WARMUP_MIN_FRAMES = 12;
+const FAST_RENDER_WARMUP_STABLE_FRAMES = 4;
+const FAST_RENDER_WARMUP_MAX_FRAMES = 36;
+const FAST_RENDER_WARMUP_SYNTHETIC_DESTRUCTION_PASSES = 1;
+const FAST_RENDER_WARMUP_POST_CLEANUP_EFFECT_PASSES = 1;
+const FAST_RENDER_WARMUP_POST_CLEANUP_EFFECT_FRAMES = 3;
+const FAST_RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES = 8;
+const FAST_RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES = 36;
+const FAST_RENDER_WARMUP_MAX_DURATION_MS = 2_600;
+const FAST_RENDER_WARMUP_POST_CLEANUP_MAX_DURATION_MS = 1_200;
 const RENDER_WARMUP_SYNTHETIC_ORIGIN = new THREE.Vector3(72, 1.2, 72);
 const RENDER_WARMUP_SYNTHETIC_DESTRUCTION_ZONE = "render-warmup-destruction";
 const AIM_TRAFFIC_STEP_SECONDS = 1 / 24;
@@ -197,6 +209,59 @@ interface SyntheticDestructionWarmupOptions {
   statusPrefix?: string;
 }
 
+interface RenderWarmupProfile {
+  label: string;
+  compileAllCameras: boolean;
+  brutalPasses: number;
+  framesPerBrutalPass: number;
+  minFrames: number;
+  stableFrames: number;
+  maxFrames: number;
+  maxDurationMs: number;
+  syntheticDestructionPasses: number;
+  postCleanupEffectPasses: number;
+  postCleanupEffectFrames: number;
+  postCleanupStableFrames: number;
+  postCleanupMaxFrames: number;
+  postCleanupMaxDurationMs: number;
+}
+
+type RenderWarmupMode = "none" | "smoke" | "fast" | "full";
+
+const FULL_RENDER_WARMUP_PROFILE: RenderWarmupProfile = {
+  label: "renderer pipelines",
+  compileAllCameras: true,
+  brutalPasses: RENDER_WARMUP_BRUTAL_PASSES,
+  framesPerBrutalPass: RENDER_WARMUP_FRAMES_PER_BRUTAL_PASS,
+  minFrames: RENDER_WARMUP_MIN_FRAMES,
+  stableFrames: RENDER_WARMUP_STABLE_FRAMES,
+  maxFrames: RENDER_WARMUP_MAX_FRAMES,
+  maxDurationMs: RENDER_WARMUP_MAX_DURATION_MS,
+  syntheticDestructionPasses: RENDER_WARMUP_SYNTHETIC_DESTRUCTION_PASSES,
+  postCleanupEffectPasses: RENDER_WARMUP_POST_CLEANUP_EFFECT_PASSES,
+  postCleanupEffectFrames: RENDER_WARMUP_POST_CLEANUP_EFFECT_FRAMES,
+  postCleanupStableFrames: RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES,
+  postCleanupMaxFrames: RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES,
+  postCleanupMaxDurationMs: RENDER_WARMUP_POST_CLEANUP_MAX_DURATION_MS
+};
+
+const FAST_RENDER_WARMUP_PROFILE: RenderWarmupProfile = {
+  label: "renderer pipelines",
+  compileAllCameras: false,
+  brutalPasses: FAST_RENDER_WARMUP_BRUTAL_PASSES,
+  framesPerBrutalPass: FAST_RENDER_WARMUP_FRAMES_PER_BRUTAL_PASS,
+  minFrames: FAST_RENDER_WARMUP_MIN_FRAMES,
+  stableFrames: FAST_RENDER_WARMUP_STABLE_FRAMES,
+  maxFrames: FAST_RENDER_WARMUP_MAX_FRAMES,
+  maxDurationMs: FAST_RENDER_WARMUP_MAX_DURATION_MS,
+  syntheticDestructionPasses: FAST_RENDER_WARMUP_SYNTHETIC_DESTRUCTION_PASSES,
+  postCleanupEffectPasses: FAST_RENDER_WARMUP_POST_CLEANUP_EFFECT_PASSES,
+  postCleanupEffectFrames: FAST_RENDER_WARMUP_POST_CLEANUP_EFFECT_FRAMES,
+  postCleanupStableFrames: FAST_RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES,
+  postCleanupMaxFrames: FAST_RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES,
+  postCleanupMaxDurationMs: FAST_RENDER_WARMUP_POST_CLEANUP_MAX_DURATION_MS
+};
+
 interface DowntownMayhemRendererBundle {
   renderer: DowntownMayhemRenderer;
   preference: RendererBackendPreference;
@@ -223,7 +288,7 @@ declare global {
 }
 
 async function createDowntownMayhemRenderer(settings: GameSettings): Promise<DowntownMayhemRendererBundle> {
-  if (settings.rendererBackend !== "webgl" && (await canAttemptWebGpu())) {
+  if (settings.rendererBackend === "webgpu" && (await canAttemptWebGpu())) {
     try {
       const { WebGPURenderer: WebGpuRenderer } = await import("three/webgpu");
       const renderer = new WebGpuRenderer({
@@ -318,20 +383,18 @@ function createInitialRenderWarmupState(): RenderWarmupState {
   };
 }
 
-function isSmokeWarmupMode(): boolean {
-  try {
-    return new URLSearchParams(globalThis.location?.search ?? "").has("smoke");
-  } catch {
-    return false;
-  }
-}
-
-function shouldBlockOnRenderWarmup(): boolean {
+function currentRenderWarmupMode(rendererBackend: "webgpu" | "webgl2" | "webgl"): RenderWarmupMode {
   try {
     const search = new URLSearchParams(globalThis.location?.search ?? "");
-    return search.has("smoke") || search.has("fullWarmup");
+    if (search.has("smoke")) {
+      return "smoke";
+    }
+    if (search.has("fullWarmup")) {
+      return "full";
+    }
+    return rendererBackend === "webgpu" ? "fast" : "none";
   } catch {
-    return false;
+    return rendererBackend === "webgpu" ? "fast" : "none";
   }
 }
 
@@ -1952,11 +2015,7 @@ class Game {
     this.loadLevel();
     this.audio.preload();
     this.resize();
-    if (shouldBlockOnRenderWarmup()) {
-      this.scheduleRenderWarmup();
-    } else {
-      this.renderWarmupState = this.createImmediateReadyWarmupState(performance.now());
-    }
+    this.prepareRenderWarmup(currentRenderWarmupMode(this.rendererBackend));
     this.perfDiskLogger?.start();
     window.addEventListener("resize", this.handleResize);
     window.visualViewport?.addEventListener("resize", this.handleResize);
@@ -2487,7 +2546,17 @@ class Game {
     };
   }
 
-  private scheduleRenderWarmup(): void {
+  private prepareRenderWarmup(mode: RenderWarmupMode): void {
+    if (mode === "none") {
+      this.renderWarmupToken += 1;
+      this.renderWarmupPromise = null;
+      this.renderWarmupState = this.createImmediateReadyWarmupState(performance.now());
+      return;
+    }
+    this.scheduleRenderWarmup(mode);
+  }
+
+  private scheduleRenderWarmup(mode: RenderWarmupMode): void {
     const token = this.renderWarmupToken + 1;
     this.renderWarmupToken = token;
     this.disposeRenderWarmupGroup();
@@ -2505,7 +2574,10 @@ class Game {
       frames: 0
     };
     this.status = "Preparing renderer pipelines before impact.";
-    this.renderWarmupPromise = isSmokeWarmupMode() ? this.runSmokeRenderWarmup(token, group) : this.runRenderWarmup(token, group);
+    this.renderWarmupPromise =
+      mode === "smoke"
+        ? this.runSmokeRenderWarmup(token, group)
+        : this.runRenderWarmup(token, group, mode === "full" ? FULL_RENDER_WARMUP_PROFILE : FAST_RENDER_WARMUP_PROFILE);
   }
 
   private async runSmokeRenderWarmup(token: number, group: THREE.Group): Promise<void> {
@@ -2563,7 +2635,7 @@ class Game {
     }
   }
 
-  private async runRenderWarmup(token: number, group: THREE.Group): Promise<void> {
+  private async runRenderWarmup(token: number, group: THREE.Group, profile: RenderWarmupProfile): Promise<void> {
     this.scene.add(group);
     const restoreFrustumCulling = disableSceneFrustumCullingForWarmup(this.scene);
     const warmupCameras = createRenderWarmupCameras(this.cameraRig.camera);
@@ -2596,13 +2668,15 @@ class Game {
       this.physics.flushStagedVisualActivations(Number.POSITIVE_INFINITY, 0);
       this.destruction.showFragmentVisualWarmupPreview();
       this.playRenderWarmupEffects(0);
-      for (const camera of warmupCameras) {
-        await this.renderer.compileAsync(this.scene, camera);
+      if (profile.compileAllCameras) {
+        for (const camera of warmupCameras) {
+          await this.renderer.compileAsync(this.scene, camera);
+        }
       }
       let frames = 0;
       let stableFrames = 0;
       let lastProgramCount = rendererProgramCount(this.renderer);
-      const warmupDeadline = performance.now() + RENDER_WARMUP_MAX_DURATION_MS;
+      const warmupDeadline = performance.now() + profile.maxDurationMs;
       const updateWarmupState = (): void => {
         this.renderWarmupState = {
           ...this.renderWarmupState,
@@ -2625,12 +2699,12 @@ class Game {
         updateWarmupState();
         return true;
       };
-      for (let pass = 0; pass < RENDER_WARMUP_BRUTAL_PASSES && performance.now() < warmupDeadline; pass += 1) {
-        this.status = `Preparing renderer pipelines before impact (${pass + 1}/${RENDER_WARMUP_BRUTAL_PASSES}).`;
+      for (let pass = 0; pass < profile.brutalPasses && performance.now() < warmupDeadline; pass += 1) {
+        this.status = `Preparing ${profile.label} before impact (${pass + 1}/${profile.brutalPasses}).`;
         this.physics.flushStagedVisualActivations(Number.POSITIVE_INFINITY, 0);
         this.destruction.showFragmentVisualWarmupPreview();
         this.playRenderWarmupEffects(pass);
-        for (let frame = 0; frame < RENDER_WARMUP_FRAMES_PER_BRUTAL_PASS && performance.now() < warmupDeadline; frame += 1) {
+        for (let frame = 0; frame < profile.framesPerBrutalPass && performance.now() < warmupDeadline; frame += 1) {
           if (!(await renderWarmupFrame())) {
             return;
           }
@@ -2640,14 +2714,18 @@ class Game {
       }
       if (
         performance.now() < warmupDeadline &&
-        !(await this.runSyntheticDestructionWarmup(token, renderWarmupFrame, { deadlineAt: warmupDeadline }))
+        !(await this.runSyntheticDestructionWarmup(token, renderWarmupFrame, {
+          deadlineAt: warmupDeadline,
+          passes: profile.syntheticDestructionPasses,
+          framesPerPass: profile.framesPerBrutalPass
+        }))
       ) {
         return;
       }
       while (
         performance.now() < warmupDeadline &&
-        frames < RENDER_WARMUP_MAX_FRAMES &&
-        (frames < RENDER_WARMUP_MIN_FRAMES || stableFrames < RENDER_WARMUP_STABLE_FRAMES)
+        frames < profile.maxFrames &&
+        (frames < profile.minFrames || stableFrames < profile.stableFrames)
       ) {
         if (!(await renderWarmupFrame())) {
           return;
@@ -2662,18 +2740,18 @@ class Game {
       }
       cleanupTransientWarmup(false, true, false);
       restoreFrustumCulling();
-      this.status = "Preparing renderer pipelines before impact (runtime cascade pools).";
-      const postCleanupDeadline = performance.now() + RENDER_WARMUP_POST_CLEANUP_MAX_DURATION_MS;
+      this.status = `Preparing ${profile.label} before impact (runtime cascade pools).`;
+      const postCleanupDeadline = performance.now() + profile.postCleanupMaxDurationMs;
       for (
         let pass = 0;
-        pass < RENDER_WARMUP_POST_CLEANUP_EFFECT_PASSES && performance.now() < postCleanupDeadline;
+        pass < profile.postCleanupEffectPasses && performance.now() < postCleanupDeadline;
         pass += 1
       ) {
         this.destruction.showFragmentVisualWarmupPreview();
-        this.playRenderWarmupEffects(RENDER_WARMUP_BRUTAL_PASSES + pass);
+        this.playRenderWarmupEffects(profile.brutalPasses + pass);
         for (
           let frame = 0;
-          frame < RENDER_WARMUP_POST_CLEANUP_EFFECT_FRAMES && performance.now() < postCleanupDeadline;
+          frame < profile.postCleanupEffectFrames && performance.now() < postCleanupDeadline;
           frame += 1
         ) {
           if (!(await renderWarmupFrame())) {
@@ -2685,18 +2763,20 @@ class Game {
         this.particles.keepPoolPipelinesResident();
         this.destruction.flushFragmentInstanceBounds();
         this.physics.flushInstancedRenderBounds();
-        for (const camera of warmupCameras) {
-          await this.renderer.compileAsync(this.scene, camera);
+        if (profile.compileAllCameras) {
+          for (const camera of warmupCameras) {
+            await this.renderer.compileAsync(this.scene, camera);
+          }
         }
       }
-      this.status = "Preparing renderer pipelines before impact (settling runtime scene).";
+      this.status = `Preparing ${profile.label} before impact (settling runtime scene).`;
       lastProgramCount = rendererProgramCount(this.renderer);
       stableFrames = 0;
       let postCleanupFrames = 0;
       while (
         performance.now() < postCleanupDeadline &&
-        postCleanupFrames < RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES &&
-        stableFrames < RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES
+        postCleanupFrames < profile.postCleanupMaxFrames &&
+        stableFrames < profile.postCleanupStableFrames
       ) {
         if (!(await renderWarmupFrame())) {
           return;
@@ -3939,23 +4019,16 @@ class Game {
     this.levelReloadInProgress = true;
     void this.renderer.setAnimationLoop(null);
     const level = this.currentLevel();
-    const blockOnWarmup = shouldBlockOnRenderWarmup();
+    const warmupMode = currentRenderWarmupMode(this.rendererBackend);
     this.perfDiskLogger?.flush("level-reload-start");
     this.options.showLoading?.(level.name, status);
     await waitForDomPaint();
     try {
       this.loadLevel();
       this.ui.hideScorePanel();
-      if (blockOnWarmup) {
-        this.scheduleRenderWarmup();
-        this.options.updateLoadingStatus?.("Warming renderer pipelines");
-        await this.waitForRenderWarmup();
-      } else {
-        this.renderWarmupToken += 1;
-        this.renderWarmupPromise = null;
-        this.renderWarmupState = this.createImmediateReadyWarmupState(performance.now());
-        this.options.updateLoadingStatus?.("Ready");
-      }
+      this.prepareRenderWarmup(warmupMode);
+      this.options.updateLoadingStatus?.(warmupMode === "none" ? "Ready" : "Warming renderer pipelines");
+      await this.waitForRenderWarmup();
       this.ui.showPlayScreen();
       this.updateHud();
       this.options.updateLoadingStatus?.("Ready");
