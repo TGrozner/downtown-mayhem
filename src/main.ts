@@ -128,6 +128,14 @@ interface DowntownMayhemRenderStats {
   rendererPreference: RendererBackendPreference;
   rendererBackend: "webgpu" | "webgl2" | "webgl";
   bodyCount: number;
+  dynamicBodyCount: number;
+  awakeBodyCount: number;
+  debrisBodyCount: number;
+  awakeDebrisBodyCount: number;
+  fixedStructureCount: number;
+  activeDebrisCount: number;
+  frozenDebrisCount: number;
+  pendingSupportReleaseCount: number;
   drawCalls: number;
   triangles: number;
   lines: number;
@@ -1441,6 +1449,13 @@ interface PerfFrameSummary {
   totalMs: number;
   deltaMs: number;
   bodyCount: number;
+  dynamicBodyCount: number;
+  awakeBodyCount: number;
+  debrisBodyCount: number;
+  awakeDebrisBodyCount: number;
+  activeDebrisCount: number;
+  frozenDebrisCount: number;
+  pendingSupportReleaseCount: number;
   accountedMs: number;
   unattributedMs: number;
   renderMs: number;
@@ -1636,6 +1651,13 @@ function summarizePerfFrame(frame: PerfFrameSnapshot): PerfFrameSummary {
     totalMs: frame.totalMs,
     deltaMs: frame.deltaMs,
     bodyCount: frame.bodyCount,
+    dynamicBodyCount: frame.dynamicBodyCount,
+    awakeBodyCount: frame.awakeBodyCount,
+    debrisBodyCount: frame.debrisBodyCount,
+    awakeDebrisBodyCount: frame.awakeDebrisBodyCount,
+    activeDebrisCount: frame.activeDebrisCount,
+    frozenDebrisCount: frame.frozenDebrisCount,
+    pendingSupportReleaseCount: frame.pendingSupportReleaseCount,
     accountedMs: frame.accountedMs,
     unattributedMs: frame.unattributedMs,
     renderMs: frame.timings["renderer.render"] ?? 0,
@@ -1803,6 +1825,14 @@ class Game {
     rendererPreference: "auto",
     rendererBackend: "webgl2",
     bodyCount: 0,
+    dynamicBodyCount: 0,
+    awakeBodyCount: 0,
+    debrisBodyCount: 0,
+    awakeDebrisBodyCount: 0,
+    fixedStructureCount: 0,
+    activeDebrisCount: 0,
+    frozenDebrisCount: 0,
+    pendingSupportReleaseCount: 0,
     drawCalls: 0,
     triangles: 0,
     lines: 0,
@@ -1972,7 +2002,7 @@ class Game {
     this.timer.update();
     const frameDelta = this.timer.getDelta();
     const delta = Math.min(frameDelta, 0.05);
-    perfMonitor.beginFrame(frameDelta * 1000, this.physics.getDynamicBodyCount());
+    perfMonitor.beginFrame(frameDelta * 1000, this.physics.getRuntimeStats());
     try {
       this.updateFps(frameDelta);
       this.physics.flushStagedVisualActivations();
@@ -2028,6 +2058,7 @@ class Game {
       perfMonitor.addTiming("game.updatePhase", startedAt);
       startedAt = perfMonitor.timeStart();
       this.destruction.processQueuedFractures(FRACTURE_PROCESS_MAX_PER_FRAME, FRACTURE_PROCESS_TIME_BUDGET_MS);
+      this.physics.flushPendingSupportReleases();
       this.destruction.updateVisualFragments(delta * visualScale);
       this.physics.flushStagedVisualActivations(8, 0.25);
       this.destruction.flushFragmentInstanceBounds();
@@ -2082,6 +2113,7 @@ class Game {
   private captureRenderStats(): DowntownMayhemRenderStats {
     const visibleMaterials = new Set<THREE.Material>();
     let visibleMeshes = 0;
+    const physicsStats = this.physics.getRuntimeStats();
     this.scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh) || !object.visible) {
         return;
@@ -2097,7 +2129,15 @@ class Game {
       levelName: this.currentLevel().name,
       rendererPreference: this.rendererPreference,
       rendererBackend: this.rendererBackend,
-      bodyCount: this.physics.getDynamicBodyCount(),
+      bodyCount: physicsStats.bodyCount,
+      dynamicBodyCount: physicsStats.dynamicBodyCount,
+      awakeBodyCount: physicsStats.awakeBodyCount,
+      debrisBodyCount: physicsStats.debrisBodyCount,
+      awakeDebrisBodyCount: physicsStats.awakeDebrisBodyCount,
+      fixedStructureCount: physicsStats.fixedStructureCount,
+      activeDebrisCount: physicsStats.activeDebrisCount,
+      frozenDebrisCount: physicsStats.frozenDebrisCount,
+      pendingSupportReleaseCount: physicsStats.pendingSupportReleaseCount,
       drawCalls: rendererDrawCalls(this.renderer),
       triangles: this.renderer.info.render.triangles,
       lines: this.renderer.info.render.lines,
@@ -2113,13 +2153,22 @@ class Game {
   }
 
   private captureFastRenderStats(): DowntownMayhemRenderStats {
+    const physicsStats = this.physics.getRuntimeStats();
     this.lastRenderStats = {
       ...this.lastRenderStats,
       frame: this.renderStatsFrame,
       levelName: this.currentLevel().name,
       rendererPreference: this.rendererPreference,
       rendererBackend: this.rendererBackend,
-      bodyCount: this.physics.getDynamicBodyCount(),
+      bodyCount: physicsStats.bodyCount,
+      dynamicBodyCount: physicsStats.dynamicBodyCount,
+      awakeBodyCount: physicsStats.awakeBodyCount,
+      debrisBodyCount: physicsStats.debrisBodyCount,
+      awakeDebrisBodyCount: physicsStats.awakeDebrisBodyCount,
+      fixedStructureCount: physicsStats.fixedStructureCount,
+      activeDebrisCount: physicsStats.activeDebrisCount,
+      frozenDebrisCount: physicsStats.frozenDebrisCount,
+      pendingSupportReleaseCount: physicsStats.pendingSupportReleaseCount,
       drawCalls: rendererDrawCalls(this.renderer),
       triangles: this.renderer.info.render.triangles,
       lines: this.renderer.info.render.lines,

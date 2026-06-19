@@ -3,10 +3,28 @@ export interface PerfFrameSnapshot {
   totalMs: number;
   deltaMs: number;
   bodyCount: number;
+  dynamicBodyCount: number;
+  awakeBodyCount: number;
+  debrisBodyCount: number;
+  awakeDebrisBodyCount: number;
+  activeDebrisCount: number;
+  frozenDebrisCount: number;
+  pendingSupportReleaseCount: number;
   accountedMs: number;
   unattributedMs: number;
   timings: Record<string, number>;
   counters: Record<string, number>;
+}
+
+export interface PerfFrameRuntimeStats {
+  bodyCount: number;
+  dynamicBodyCount: number;
+  awakeBodyCount: number;
+  debrisBodyCount: number;
+  awakeDebrisBodyCount: number;
+  activeDebrisCount: number;
+  frozenDebrisCount: number;
+  pendingSupportReleaseCount: number;
 }
 
 export interface PerfReport {
@@ -60,7 +78,7 @@ class PerfMonitor {
     }
   }
 
-  beginFrame(deltaMs: number, bodyCount: number): void {
+  beginFrame(deltaMs: number, runtimeStats: PerfFrameRuntimeStats): void {
     if (!this.enabled) {
       return;
     }
@@ -69,7 +87,14 @@ class PerfMonitor {
       frame: this.frameCount,
       totalMs: 0,
       deltaMs,
-      bodyCount,
+      bodyCount: runtimeStats.bodyCount,
+      dynamicBodyCount: runtimeStats.dynamicBodyCount,
+      awakeBodyCount: runtimeStats.awakeBodyCount,
+      debrisBodyCount: runtimeStats.debrisBodyCount,
+      awakeDebrisBodyCount: runtimeStats.awakeDebrisBodyCount,
+      activeDebrisCount: runtimeStats.activeDebrisCount,
+      frozenDebrisCount: runtimeStats.frozenDebrisCount,
+      pendingSupportReleaseCount: runtimeStats.pendingSupportReleaseCount,
       accountedMs: 0,
       unattributedMs: 0,
       timings: {},
@@ -180,6 +205,13 @@ function cloneFrame(frame: PerfFrameSnapshot): PerfFrameSnapshot {
     totalMs: round(frame.totalMs),
     deltaMs: round(frame.deltaMs),
     bodyCount: frame.bodyCount,
+    dynamicBodyCount: frame.dynamicBodyCount,
+    awakeBodyCount: frame.awakeBodyCount,
+    debrisBodyCount: frame.debrisBodyCount,
+    awakeDebrisBodyCount: frame.awakeDebrisBodyCount,
+    activeDebrisCount: frame.activeDebrisCount,
+    frozenDebrisCount: frame.frozenDebrisCount,
+    pendingSupportReleaseCount: frame.pendingSupportReleaseCount,
     accountedMs: round(frame.accountedMs),
     unattributedMs: round(frame.unattributedMs),
     timings: roundRecord(frame.timings),

@@ -31,6 +31,9 @@ const STATIC_DETAIL_BUCKET_RADIUS = Math.hypot(
 );
 const STAGED_VISUAL_ACTIVATIONS_PER_FRAME = 32;
 const STAGED_VISUAL_ACTIVATION_MAX_MS = 0.7;
+const SUPPORT_RELEASES_PER_FRAME = 12;
+const SUPPORT_RELEASE_FLUSH_BUDGET_MS = 0.55;
+const SUPPORT_RELEASE_QUEUE_COMPACT_HEAD = 64;
 const MAX_PENDING_CHAIN_COLLISION_EVENTS = 768;
 const MAX_PENDING_SURFACE_COLLISION_EVENTS = 320;
 const TRAFFIC_AVOIDANCE_PADDING = 0.38;
@@ -105,6 +108,18 @@ export interface FrozenVisualHandle {
   dispose(): void;
 }
 
+export interface PhysicsRuntimeStats {
+  bodyCount: number;
+  dynamicBodyCount: number;
+  awakeBodyCount: number;
+  debrisBodyCount: number;
+  awakeDebrisBodyCount: number;
+  fixedStructureCount: number;
+  activeDebrisCount: number;
+  frozenDebrisCount: number;
+  pendingSupportReleaseCount: number;
+}
+
 export interface DynamicVisualProxy {
   setVisible(visible: boolean): void;
   sync(position: THREE.Vector3, rotation: THREE.Quaternion): void;
@@ -167,6 +182,22 @@ interface TrafficAdvancePlan {
   maxZ: number;
   priority: number;
   blocked: boolean;
+}
+
+interface SupportReleaseConfig {
+  groupId: string;
+  radius: number;
+  height: number;
+  fallDirection: THREE.Vector3;
+}
+
+interface PendingSupportRelease {
+  objectId: number;
+  originX: number;
+  originY: number;
+  originZ: number;
+  sameStack: boolean;
+  supportRelease: SupportReleaseConfig | null;
 }
 
 interface FrozenRubblePart {
@@ -371,6 +402,9 @@ export class PhysicsWorld {
   private readonly preStepVelocitySamples = new Map<number, MotionSample>();
   private readonly surfaceColliderLabels = new Map<number, string>();
   private readonly releasedSupportGroups = new Set<string>();
+  private readonly pendingSupportReleases: PendingSupportRelease[] = [];
+  private pendingSupportReleaseHead = 0;
+  private readonly pendingSupportReleaseObjectIds = new Set<number>();
   private readonly pendingCollisionEvents: Array<{ firstId: number; secondId: number; started: boolean; key: string }> = [];
   private pendingCollisionEventHead = 0;
   private readonly pendingCollisionEventKeys = new Set<string>();
@@ -760,6 +794,47 @@ export class PhysicsWorld {
 
   getDynamicBodyCount(): number {
     return this.objects.size;
+  }
+
+  getRuntimeStats(): PhysicsRuntimeStats {
+    let dynamicBodyCount = 0;
+    let awakeBodyCount = 0;
+    let debrisBodyCount = 0;
+    let awakeDebrisBodyCount = 0;
+    let fixedStructureCount = 0;
+
+    for (const object of this.objects.values()) {
+      if (object.bodyType === "fixed") {
+        if (object.category === "structure") {
+          fixedStructureCount += 1;
+        }
+        continue;
+      }
+
+      dynamicBodyCount += 1;
+      const awake = !object.body.isSleeping();
+      if (awake) {
+        awakeBodyCount += 1;
+      }
+      if (object.isDebris) {
+        debrisBodyCount += 1;
+        if (awake) {
+          awakeDebrisBodyCount += 1;
+        }
+      }
+    }
+
+    return {
+      bodyCount: this.objects.size,
+      dynamicBodyCount,
+      awakeBodyCount,
+      debrisBodyCount,
+      awakeDebrisBodyCount,
+      fixedStructureCount,
+      activeDebrisCount: this.activeDebrisCount(),
+      frozenDebrisCount: this.activeFrozenDebrisCount(),
+      pendingSupportReleaseCount: this.pendingSupportReleases.length - this.pendingSupportReleaseHead
+    };
   }
 
   batchStaticDetails(): void {
@@ -1221,6 +1296,7 @@ export class PhysicsWorld {
     this.trafficWaitTicks.delete(object.id);
     this.preStepVelocities.delete(object.id);
     this.preStepVelocitySamples.delete(object.id);
+    this.pendingSupportReleaseObjectIds.delete(object.id);
     this.world.removeRigidBody(object.body);
     this.objects.delete(object.id);
   }
@@ -1248,6 +1324,7 @@ export class PhysicsWorld {
     this.debrisQueueHead = 0;
     this.clearStagedVisualActivationQueue();
     this.releasedSupportGroups.clear();
+    this.clearPendingSupportReleases();
     this.clearPendingEvents();
     this.preStepVelocities.clear();
     this.preStepVelocitySamples.clear();
@@ -1343,7 +1420,7 @@ export class PhysicsWorld {
     const neighborRadius = supportRelease ? 0 : horizontalRadius * 0.72;
     const minY = origin.y + Math.max(0.06, source.dimensions.y * 0.34);
     const maxY = origin.y + (supportRelease?.height ?? Math.max(2.4, source.dimensions.y * 6.4));
-    let destabilized = 0;
+    let queued = 0;
 
     const candidates = this.collectObjectsInAabb(
       new THREE.Vector3(origin.x, (minY + maxY) * 0.5, origin.z),
@@ -1370,43 +1447,129 @@ export class PhysicsWorld {
         continue;
       }
 
-      if (object.bodyType === "fixed") {
-        this.restoreStaticDetailBatch(object);
-        object.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-        object.bodyType = "dynamic";
-        for (const handle of object.colliderHandles) {
-          this.world.getCollider(handle).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-        }
-        object.body.setLinearDamping(supportRelease && sameStack ? 0.16 : 0.68);
-        object.body.setAngularDamping(supportRelease && sameStack ? 0.08 : 1.24);
-        const massScale = supportRelease && sameStack ? object.supportReleaseMassScale ?? 1.15 : 3.4;
-        object.body.setAdditionalMass(object.dimensions.x * object.dimensions.y * object.dimensions.z * massScale, true);
-        object.body.enableCcd(shouldEnableSupportReleaseCcd(object, supportRelease !== undefined && sameStack));
-      } else {
-        object.body.wakeUp();
+      if (
+        this.queueSupportRelease({
+          objectId: object.id,
+          originX: origin.x,
+          originY: origin.y,
+          originZ: origin.z,
+          sameStack,
+          supportRelease
+        })
+      ) {
+        queued += 1;
       }
-
-      if (supportRelease && sameStack) {
-        const heightFactor = THREE.MathUtils.clamp((position.y - origin.y) / supportRelease.height, 0.18, 1);
-        const fallImpulse = (0.45 + heightFactor * 1.55) * (object.supportReleaseImpulseScale ?? 1);
-        const fallX = supportRelease.fallDirection.x;
-        const fallZ = supportRelease.fallDirection.z;
-        object.body.applyImpulse({ x: fallX * fallImpulse, y: -0.18, z: fallZ * fallImpulse }, true);
-        const torqueImpulse = (2.1 + heightFactor * 4.8) * (object.supportReleaseTorqueScale ?? 1);
-        object.body.applyTorqueImpulse({ x: fallZ * torqueImpulse, y: 0.02, z: -fallX * torqueImpulse }, true);
-      } else {
-        const lateralScale = sameStack ? 0.16 : 0.08;
-        object.body.applyImpulse({ x: dx * lateralScale, y: -1.15, z: dz * lateralScale }, true);
-        object.body.applyTorqueImpulse({ x: dz * 0.035, y: 0, z: -dx * 0.035 }, true);
-      }
-      destabilized += 1;
     }
 
-    if (supportRelease && destabilized > 0) {
+    if (supportRelease && queued > 0) {
       this.releasedSupportGroups.add(supportRelease.groupId);
     }
-    perfMonitor.addCount("physics.supportDestabilized", destabilized);
-    return destabilized;
+    perfMonitor.addCount("physics.supportReleaseQueued", queued);
+    perfMonitor.addCount("physics.supportReleaseBacklog", this.pendingSupportReleases.length - this.pendingSupportReleaseHead);
+    return queued;
+  }
+
+  flushPendingSupportReleases(maxReleases = SUPPORT_RELEASES_PER_FRAME, maxMilliseconds = SUPPORT_RELEASE_FLUSH_BUDGET_MS): number {
+    if (this.pendingSupportReleaseHead >= this.pendingSupportReleases.length) {
+      this.compactPendingSupportReleases(true);
+      return 0;
+    }
+    const startedAt = perfMonitor.timeStart();
+    const deadline = maxMilliseconds > 0 ? performance.now() + maxMilliseconds : Number.POSITIVE_INFINITY;
+    let released = 0;
+    while (this.pendingSupportReleaseHead < this.pendingSupportReleases.length && released < maxReleases) {
+      if (released > 0 && performance.now() >= deadline) {
+        break;
+      }
+      const release = this.pendingSupportReleases[this.pendingSupportReleaseHead];
+      this.pendingSupportReleaseHead += 1;
+      if (release && this.applySupportRelease(release)) {
+        released += 1;
+      }
+    }
+    this.compactPendingSupportReleases(false);
+    const backlog = this.pendingSupportReleases.length - this.pendingSupportReleaseHead;
+    perfMonitor.addCount("physics.supportDestabilized", released);
+    perfMonitor.addCount("physics.supportReleaseBacklog", backlog);
+    perfMonitor.addTiming("physics.flushSupportReleases", startedAt);
+    return released;
+  }
+
+  private queueSupportRelease(release: PendingSupportRelease): boolean {
+    if (this.pendingSupportReleaseObjectIds.has(release.objectId)) {
+      return false;
+    }
+    const object = this.objects.get(release.objectId);
+    if (!object || !canReleaseQueuedSupportObject(object)) {
+      return false;
+    }
+    this.pendingSupportReleaseObjectIds.add(release.objectId);
+    this.pendingSupportReleases.push(release);
+    return true;
+  }
+
+  private applySupportRelease(release: PendingSupportRelease): boolean {
+    this.pendingSupportReleaseObjectIds.delete(release.objectId);
+    const object = this.objects.get(release.objectId);
+    if (!object || !canReleaseQueuedSupportObject(object)) {
+      return false;
+    }
+
+    const position = object.body.translation();
+    const dx = position.x - release.originX;
+    const dz = position.z - release.originZ;
+    const supportRelease = release.supportRelease;
+    const sameSupportGroup = supportRelease !== null && release.sameStack;
+
+    if (object.bodyType === "fixed") {
+      this.restoreStaticDetailBatch(object);
+      object.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+      object.bodyType = "dynamic";
+      for (const handle of object.colliderHandles) {
+        this.world.getCollider(handle).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+      }
+      object.body.setLinearDamping(sameSupportGroup ? 0.16 : 0.68);
+      object.body.setAngularDamping(sameSupportGroup ? 0.08 : 1.24);
+      const massScale = sameSupportGroup ? object.supportReleaseMassScale ?? 1.15 : 3.4;
+      object.body.setAdditionalMass(object.dimensions.x * object.dimensions.y * object.dimensions.z * massScale, true);
+      object.body.enableCcd(shouldEnableSupportReleaseCcd(object, sameSupportGroup));
+    } else {
+      object.body.wakeUp();
+    }
+
+    if (sameSupportGroup && supportRelease) {
+      const heightFactor = THREE.MathUtils.clamp((position.y - release.originY) / supportRelease.height, 0.18, 1);
+      const fallImpulse = (0.45 + heightFactor * 1.55) * (object.supportReleaseImpulseScale ?? 1);
+      const fallX = supportRelease.fallDirection.x;
+      const fallZ = supportRelease.fallDirection.z;
+      object.body.applyImpulse({ x: fallX * fallImpulse, y: -0.18, z: fallZ * fallImpulse }, true);
+      const torqueImpulse = (2.1 + heightFactor * 4.8) * (object.supportReleaseTorqueScale ?? 1);
+      object.body.applyTorqueImpulse({ x: fallZ * torqueImpulse, y: 0.02, z: -fallX * torqueImpulse }, true);
+    } else {
+      const lateralScale = release.sameStack ? 0.16 : 0.08;
+      object.body.applyImpulse({ x: dx * lateralScale, y: -1.15, z: dz * lateralScale }, true);
+      object.body.applyTorqueImpulse({ x: dz * 0.035, y: 0, z: -dx * 0.035 }, true);
+    }
+    return true;
+  }
+
+  private compactPendingSupportReleases(force: boolean): void {
+    if (this.pendingSupportReleaseHead === 0) {
+      return;
+    }
+    if (this.pendingSupportReleaseHead >= this.pendingSupportReleases.length) {
+      this.pendingSupportReleases.length = 0;
+      this.pendingSupportReleaseHead = 0;
+      return;
+    }
+    if (
+      force ||
+      (this.pendingSupportReleaseHead > SUPPORT_RELEASE_QUEUE_COMPACT_HEAD &&
+        this.pendingSupportReleaseHead * 2 > this.pendingSupportReleases.length)
+    ) {
+      this.pendingSupportReleases.splice(0, this.pendingSupportReleaseHead);
+      this.pendingSupportReleaseHead = 0;
+    }
   }
 
   private enforceDebrisCap(): void {
@@ -1924,6 +2087,12 @@ export class PhysicsWorld {
     this.pendingSurfaceCollisionEvents.length = 0;
     this.pendingSurfaceCollisionEventHead = 0;
     this.pendingSurfaceCollisionEventKeys.clear();
+  }
+
+  private clearPendingSupportReleases(): void {
+    this.pendingSupportReleases.length = 0;
+    this.pendingSupportReleaseHead = 0;
+    this.pendingSupportReleaseObjectIds.clear();
   }
 
   private compactPendingCollisionEvents(): void {
@@ -2456,9 +2625,7 @@ function shouldEnableSupportReleaseCcd(object: PhysicsObject, sameSupportGroup: 
   return Math.max(object.dimensions.x, object.dimensions.y, object.dimensions.z) >= 1.25;
 }
 
-function supportReleaseConfig(
-  source: PhysicsObject
-): { groupId: string; radius: number; height: number; fallDirection: THREE.Vector3 } | null {
+function supportReleaseConfig(source: PhysicsObject): SupportReleaseConfig | null {
   if (
     source.supportGroupId === undefined ||
     source.supportReleaseRadius === undefined ||
@@ -2496,6 +2663,10 @@ function canDestabilizeStructure(source: PhysicsObject, candidate: PhysicsObject
     return false;
   }
   return true;
+}
+
+function canReleaseQueuedSupportObject(object: PhysicsObject): boolean {
+  return object.category === "structure" && !object.isDebris && object.zoneId !== "surface";
 }
 
 function disposeMeshTree(root: THREE.Mesh): void {

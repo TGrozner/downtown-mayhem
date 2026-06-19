@@ -10,9 +10,9 @@ const IMMEDIATE_DEBRIS_FRAGMENT_VISUALS = 3;
 const PRIMARY_PHYSICAL_FRAGMENT_LIMIT = 8;
 const SECONDARY_PHYSICAL_FRAGMENT_LIMIT = 3;
 const MIN_PHYSICAL_FRAGMENT_VOLUME = 0.012;
-const MAX_VISUAL_ONLY_FRAGMENTS = 820;
-const VISUAL_FRAGMENT_MIN_LIFE_SECONDS = 5.5;
-const VISUAL_FRAGMENT_MAX_LIFE_SECONDS = 9.5;
+const MAX_VISUAL_ONLY_FRAGMENTS = 420;
+const VISUAL_FRAGMENT_MIN_LIFE_SECONDS = 2.6;
+const VISUAL_FRAGMENT_MAX_LIFE_SECONDS = 4.6;
 const VISUAL_FRAGMENT_SETTLE_SPEED_SQ = 0.08;
 const VISUAL_FRAGMENT_GRAVITY = 8.4;
 const VISUAL_FRAGMENT_LINEAR_DAMPING = 0.82;
@@ -89,6 +89,10 @@ interface FragmentInstanceSlot {
 interface FragmentDetailInstance {
   slot: FragmentInstanceSlot;
   localMatrix: THREE.Matrix4;
+}
+
+interface FragmentInstanceAcquireOptions {
+  details?: boolean;
 }
 
 interface FragmentInstanceBucket {
@@ -289,7 +293,12 @@ class FragmentInstanceRenderer {
     perfMonitor.addTiming("render.fragmentInstanceBounds", startedAt);
   }
 
-  acquire(materialId: MaterialId, size: THREE.Vector3, position: THREE.Vector3): DynamicVisualProxy {
+  acquire(
+    materialId: MaterialId,
+    size: THREE.Vector3,
+    position: THREE.Vector3,
+    options: FragmentInstanceAcquireOptions = {}
+  ): DynamicVisualProxy {
     const mainSlot = this.acquireSlot(
       this.mainBucketFor(materialId, position, "render.fragmentInstanceSlotMiss"),
       "render.fragmentInstanceSlotReuse"
@@ -298,19 +307,21 @@ class FragmentInstanceRenderer {
       return new NullFragmentVisualProxy();
     }
     const detailInstances: FragmentDetailInstance[] = [];
-    for (const part of fragmentDecorationParts({ materialId, size })) {
-      const detailSlot = this.acquireSlot(
-        this.detailBucketFor(part.material, position, "render.fragmentDetailInstanceSlotMiss"),
-        "render.fragmentDetailInstanceSlotReuse"
-      );
-      if (!detailSlot) {
-        continue;
+    if (options.details !== false) {
+      for (const part of fragmentDecorationParts({ materialId, size })) {
+        const detailSlot = this.acquireSlot(
+          this.detailBucketFor(part.material, position, "render.fragmentDetailInstanceSlotMiss"),
+          "render.fragmentDetailInstanceSlotReuse"
+        );
+        if (!detailSlot) {
+          continue;
+        }
+        const localRotation = new THREE.Quaternion().setFromEuler(part.rotation);
+        detailInstances.push({
+          slot: detailSlot,
+          localMatrix: new THREE.Matrix4().compose(part.offset, localRotation, part.size)
+        });
       }
-      const localRotation = new THREE.Quaternion().setFromEuler(part.rotation);
-      detailInstances.push({
-        slot: detailSlot,
-        localMatrix: new THREE.Matrix4().compose(part.offset, localRotation, part.size)
-      });
     }
     return new FragmentInstanceVisualProxy(this, mainSlot, size.clone(), detailInstances);
   }
@@ -844,7 +855,7 @@ export class DestructionSystem {
     blastRadius: number,
     sourceWasDebris: boolean
   ): void {
-    const visualProxy = this.fragmentInstances.acquire(material.id, plan.size, position);
+    const visualProxy = this.fragmentInstances.acquire(material.id, plan.size, position, { details: false });
     const offset = position.clone().sub(origin);
     const distance = Math.max(offset.length(), 0.001);
     const falloff = distance < blastRadius ? (1 - distance / blastRadius) ** 1.45 : 0.12;
