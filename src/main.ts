@@ -104,21 +104,6 @@ const RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES = 72;
 const RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES = 260;
 const RENDER_WARMUP_MAX_DURATION_MS = 6_000;
 const RENDER_WARMUP_POST_CLEANUP_MAX_DURATION_MS = 3_000;
-const RESET_WARMUP_BRUTAL_PASSES = 2;
-const RESET_WARMUP_FRAMES_PER_BRUTAL_PASS = 5;
-const RESET_WARMUP_SYNTHETIC_DESTRUCTION_PASSES = 2;
-const RESET_WARMUP_SYNTHETIC_DESTRUCTION_FRAMES = 5;
-const RESET_WARMUP_FRACTURE_PROCESS_MAX_PER_FRAME = 16;
-const RESET_WARMUP_FRACTURE_PROCESS_TIME_BUDGET_MS = 4;
-const RESET_WARMUP_STAGED_VISUAL_ACTIVATIONS_PER_FRAME = 24;
-const RESET_WARMUP_STAGED_VISUAL_ACTIVATION_TIME_BUDGET_MS = 0.55;
-const RESET_WARMUP_STAGED_VISUAL_ACTIVATION_MAX_PASSES = 48;
-const RESET_WARMUP_MAX_DURATION_MS = 6_000;
-const RESET_WARMUP_POST_CLEANUP_MAX_DURATION_MS = 2_500;
-const RESET_WARMUP_POST_CLEANUP_EFFECT_PASSES = 1;
-const RESET_WARMUP_POST_CLEANUP_EFFECT_FRAMES = 5;
-const RESET_WARMUP_SETTLE_FRAMES = 24;
-const SMOKE_RESET_WARMUP_SETTLE_FRAMES = 4;
 const RENDER_WARMUP_SYNTHETIC_ORIGIN = new THREE.Vector3(72, 1.2, 72);
 const RENDER_WARMUP_SYNTHETIC_DESTRUCTION_ZONE = "render-warmup-destruction";
 const AIM_TRAFFIC_STEP_SECONDS = 1 / 24;
@@ -345,14 +330,6 @@ function shouldBlockOnRenderWarmup(): boolean {
   try {
     const search = new URLSearchParams(globalThis.location?.search ?? "");
     return search.has("smoke") || search.has("fullWarmup");
-  } catch {
-    return false;
-  }
-}
-
-function shouldRunFullWarmupDiagnostic(): boolean {
-  try {
-    return new URLSearchParams(globalThis.location?.search ?? "").has("fullWarmup");
   } catch {
     return false;
   }
@@ -1848,7 +1825,6 @@ class Game {
   private readonly levelDecorations: THREE.Object3D[] = [];
   private renderWarmupGroup: THREE.Group | null = null;
   private readonly renderWarmupPersistentObjects: THREE.Object3D[] = [];
-  private readonly warmedLevelIds = new Set<string>();
   private readonly handleResize = () => this.resize();
   private readonly handleBeforeUnload = () => this.input.dispose();
   private readonly chainImpactCooldowns = new Map<string, number>();
@@ -1979,7 +1955,6 @@ class Game {
     if (shouldBlockOnRenderWarmup()) {
       this.scheduleRenderWarmup();
     } else {
-      this.markCurrentLevelWarmupReady();
       this.renderWarmupState = this.createImmediateReadyWarmupState(performance.now());
     }
     this.perfDiskLogger?.start();
@@ -2555,7 +2530,6 @@ class Game {
         frames: 1,
         bodyCountAfterCleanup: this.physics.getDynamicBodyCount()
       };
-      this.markCurrentLevelWarmupReady();
       if (this.runState.phase === "aim" && this.runState.shotAvailable) {
         const level = this.currentLevel();
         this.status = `${level.name}: ${level.objective}`;
@@ -2752,7 +2726,6 @@ class Game {
         frames,
         bodyCountAfterCleanup: this.physics.getDynamicBodyCount()
       };
-      this.markCurrentLevelWarmupReady();
       if (this.runState.phase === "aim" && this.runState.shotAvailable) {
         const level = this.currentLevel();
         this.status = `${level.name}: ${level.objective}`;
@@ -2781,248 +2754,6 @@ class Game {
     } finally {
       this.particles.hidePooledEffects();
       restoreFrustumCulling();
-    }
-  }
-
-  private async warmResetRuntimePipelines(): Promise<void> {
-    const token = this.renderWarmupToken + 1;
-    this.renderWarmupToken = token;
-    this.disposeRenderWarmupGroup();
-    this.renderWarmupPersistentObjects.length = 0;
-    const smokeMode = isSmokeWarmupMode();
-    const fastResetWarmup = !shouldRunFullWarmupDiagnostic();
-    const brutalPasses = smokeMode ? 1 : RESET_WARMUP_BRUTAL_PASSES;
-    const framesPerBrutalPass = fastResetWarmup ? 1 : smokeMode ? 2 : RESET_WARMUP_FRAMES_PER_BRUTAL_PASS;
-    const syntheticPasses = fastResetWarmup ? 0 : smokeMode ? 1 : RESET_WARMUP_SYNTHETIC_DESTRUCTION_PASSES;
-    const syntheticFrames = fastResetWarmup ? 0 : smokeMode ? 2 : RESET_WARMUP_SYNTHETIC_DESTRUCTION_FRAMES;
-    const postCleanupEffectPasses = fastResetWarmup ? 0 : smokeMode ? 1 : RESET_WARMUP_POST_CLEANUP_EFFECT_PASSES;
-    const postCleanupEffectFrames = fastResetWarmup ? 0 : smokeMode ? 2 : RESET_WARMUP_POST_CLEANUP_EFFECT_FRAMES;
-    const settleFrames = fastResetWarmup ? 1 : smokeMode ? SMOKE_RESET_WARMUP_SETTLE_FRAMES : RESET_WARMUP_SETTLE_FRAMES;
-    let group: THREE.Group | null = null;
-    let warmupCameras: THREE.PerspectiveCamera[] = [];
-    let restoreFrustumCulling: (() => void) | null = null;
-    let frames = 0;
-    let renderWarmupGroupDisposed = false;
-    const startedAt = performance.now();
-    const resetWarmupDeadline = startedAt + RESET_WARMUP_MAX_DURATION_MS;
-    const runtimeWarmupObjectIds: number[] = [];
-    const runtimeFragmentPipelineWarmupObjectIds: number[] = [];
-    const updateWarmupState = (): void => {
-      this.renderWarmupState = {
-        ...this.renderWarmupState,
-        programs: rendererProgramCount(this.renderer),
-        geometries: this.renderer.info.memory.geometries,
-        frames,
-        bodyCountAfterCleanup: this.physics.getDynamicBodyCount()
-      };
-    };
-    const disposeWarmupGroup = (): void => {
-      if (renderWarmupGroupDisposed) {
-        return;
-      }
-      this.disposeRenderWarmupGroup();
-      renderWarmupGroupDisposed = true;
-    };
-    const restoreWarmupFrustumCulling = (): void => {
-      if (!restoreFrustumCulling) {
-        return;
-      }
-      restoreFrustumCulling();
-      restoreFrustumCulling = null;
-    };
-    const cleanupTransientWarmup = (preserveParticlePools = false): void => {
-      this.destruction.parkFragmentVisualWarmupPreview();
-      this.clearRuntimeWarmupObjects(runtimeFragmentPipelineWarmupObjectIds);
-      this.clearRuntimeWarmupObjects(runtimeWarmupObjectIds);
-      this.physics.clearFrozenRubbleWarmupObjects();
-      this.particles.clearTransientEffects();
-      if (preserveParticlePools) {
-        this.particles.keepPoolPipelinesResident();
-      }
-      this.destruction.flushFragmentInstanceBounds();
-      this.physics.flushInstancedRenderBounds();
-      disposeWarmupGroup();
-    };
-    const renderWarmupFrame = async (): Promise<boolean> => {
-      this.particles.update(RENDER_WARMUP_DELTA_SECONDS);
-      this.destruction.updateVisualFragments(RENDER_WARMUP_DELTA_SECONDS);
-      for (const camera of warmupCameras) {
-        await renderWarmupYield();
-        this.renderer.render(this.scene, camera);
-        if (this.disposed || token !== this.renderWarmupToken) {
-          cleanupTransientWarmup();
-          return false;
-        }
-      }
-      frames += 1;
-      updateWarmupState();
-      return true;
-    };
-    const drainStagedVisualActivations = async (): Promise<boolean> => {
-      let passes = 0;
-      while (
-        performance.now() < resetWarmupDeadline &&
-        this.physics.getStagedVisualActivationBacklog() > 0 &&
-        passes < RESET_WARMUP_STAGED_VISUAL_ACTIVATION_MAX_PASSES
-      ) {
-        this.physics.flushStagedVisualActivations(
-          RESET_WARMUP_STAGED_VISUAL_ACTIVATIONS_PER_FRAME,
-          RESET_WARMUP_STAGED_VISUAL_ACTIVATION_TIME_BUDGET_MS
-        );
-        this.destruction.flushFragmentInstanceBounds();
-        this.physics.flushInstancedRenderBounds();
-        passes += 1;
-        if (!(await renderWarmupFrame())) {
-          return false;
-        }
-      }
-      return true;
-    };
-    this.renderWarmupState = {
-      phase: "warming",
-      token,
-      startedAt,
-      finishedAt: null,
-      durationMs: null,
-      programs: rendererProgramCount(this.renderer),
-      geometries: this.renderer.info.memory.geometries,
-      frames: 0
-    };
-    this.status = "Preparing reset renderer pipelines.";
-    this.options.updateLoadingStatus?.("Cleaning reset effects");
-    try {
-      group = this.createRenderWarmupGroup();
-      this.renderWarmupGroup = group;
-      warmupCameras = fastResetWarmup ? [this.cameraRig.camera] : createRenderWarmupCameras(this.cameraRig.camera);
-      runtimeWarmupObjectIds.push(...this.createRuntimeFragmentWarmupObjects());
-      runtimeFragmentPipelineWarmupObjectIds.push(...this.destruction.createRuntimeFragmentPipelineWarmupObjects());
-      restoreFrustumCulling = disableSceneFrustumCullingForWarmup(this.scene);
-      this.particles.clearTransientEffects();
-      this.destruction.clearQueuedFractures();
-      this.destruction.clearVisualFragments();
-      this.destruction.parkFragmentVisualWarmupPreview();
-      this.particles.keepPoolPipelinesResident();
-      this.destruction.flushFragmentInstanceBounds();
-      this.physics.flushInstancedRenderBounds();
-
-      this.scene.add(group);
-      this.options.updateLoadingStatus?.("Preparing reset renderer pipelines");
-      this.destruction.showFragmentVisualWarmupPreview();
-      this.playRenderWarmupEffects(0);
-      if (!(await drainStagedVisualActivations())) {
-        return;
-      }
-      for (const camera of warmupCameras) {
-        await this.renderer.compileAsync(this.scene, camera);
-      }
-      for (let pass = 0; pass < brutalPasses && performance.now() < resetWarmupDeadline; pass += 1) {
-        this.status = `Preparing reset renderer pipelines (${pass + 1}/${brutalPasses}).`;
-        this.options.updateLoadingStatus?.(`Preparing reset renderer pipelines ${pass + 1}/${brutalPasses}`);
-        if (!(await drainStagedVisualActivations())) {
-          return;
-        }
-        this.destruction.showFragmentVisualWarmupPreview();
-        this.playRenderWarmupEffects(pass);
-        for (let frame = 0; frame < framesPerBrutalPass && performance.now() < resetWarmupDeadline; frame += 1) {
-          if (!(await renderWarmupFrame())) {
-            return;
-          }
-        }
-      }
-      if (syntheticPasses > 0 && performance.now() < resetWarmupDeadline) {
-        this.options.updateLoadingStatus?.("Rehearsing reset destruction");
-        if (
-          !(await this.runSyntheticDestructionWarmup(token, renderWarmupFrame, {
-            passes: syntheticPasses,
-            framesPerPass: syntheticFrames,
-            fractureProcessMaxPerFrame: RESET_WARMUP_FRACTURE_PROCESS_MAX_PER_FRAME,
-            fractureProcessTimeBudgetMs: RESET_WARMUP_FRACTURE_PROCESS_TIME_BUDGET_MS,
-            stagedVisualActivationMaxPerFrame: RESET_WARMUP_STAGED_VISUAL_ACTIVATIONS_PER_FRAME,
-            stagedVisualActivationTimeBudgetMs: RESET_WARMUP_STAGED_VISUAL_ACTIVATION_TIME_BUDGET_MS,
-            deadlineAt: resetWarmupDeadline,
-            statusPrefix: "Preparing reset renderer pipelines"
-          }))
-        ) {
-          return;
-        }
-      }
-
-      cleanupTransientWarmup(true);
-      restoreWarmupFrustumCulling();
-      this.options.updateLoadingStatus?.("Settling reset renderer");
-      const postCleanupDeadline = performance.now() + RESET_WARMUP_POST_CLEANUP_MAX_DURATION_MS;
-      for (let pass = 0; pass < postCleanupEffectPasses && performance.now() < postCleanupDeadline; pass += 1) {
-        this.destruction.showFragmentVisualWarmupPreview();
-        this.playRenderWarmupEffects(brutalPasses + pass);
-        for (let frame = 0; frame < postCleanupEffectFrames && performance.now() < postCleanupDeadline; frame += 1) {
-          if (!(await renderWarmupFrame())) {
-            return;
-          }
-        }
-        this.destruction.parkFragmentVisualWarmupPreview();
-        this.particles.clearTransientEffects();
-        this.particles.keepPoolPipelinesResident();
-        this.destruction.flushFragmentInstanceBounds();
-        this.physics.flushInstancedRenderBounds();
-        for (const camera of warmupCameras) {
-          await this.renderer.compileAsync(this.scene, camera);
-        }
-      }
-      this.destruction.parkFragmentVisualWarmupPreview();
-      this.particles.clearTransientEffects();
-      this.particles.keepPoolPipelinesResident();
-      this.destruction.flushFragmentInstanceBounds();
-      this.physics.flushInstancedRenderBounds();
-      for (let frame = 0; frame < settleFrames && performance.now() < postCleanupDeadline; frame += 1) {
-        if (!(await renderWarmupFrame())) {
-          return;
-        }
-      }
-      this.destruction.parkFragmentVisualWarmupPreview();
-      this.particles.clearTransientEffects();
-      this.particles.hidePooledEffects();
-      this.destruction.flushFragmentInstanceBounds();
-      this.physics.flushInstancedRenderBounds();
-      const finishedAt = performance.now();
-      this.renderWarmupState = {
-        ...this.renderWarmupState,
-        phase: "ready",
-        finishedAt,
-        durationMs: finishedAt - startedAt,
-        programs: rendererProgramCount(this.renderer),
-        geometries: this.renderer.info.memory.geometries,
-        frames,
-        bodyCountAfterCleanup: this.physics.getDynamicBodyCount()
-      };
-      this.markCurrentLevelWarmupReady();
-      if (this.runState.phase === "aim" && this.runState.shotAvailable) {
-        const level = this.currentLevel();
-        this.status = `${level.name}: ${level.objective}`;
-      }
-    } catch (error) {
-      if (this.disposed || token !== this.renderWarmupToken) {
-        cleanupTransientWarmup();
-        return;
-      }
-      const finishedAt = performance.now();
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn("Downtown Mayhem: reset render warmup failed.", error);
-      this.renderWarmupState = {
-        ...this.renderWarmupState,
-        phase: "failed",
-        finishedAt,
-        durationMs: finishedAt - startedAt,
-        programs: rendererProgramCount(this.renderer),
-        geometries: this.renderer.info.memory.geometries,
-        frames,
-        bodyCountAfterCleanup: this.physics.getDynamicBodyCount(),
-        error: message
-      };
-      this.status = "Reset renderer warmup failed; next impact may stutter.";
-    } finally {
-      cleanupTransientWarmup(true);
-      this.particles.hidePooledEffects();
-      restoreWarmupFrustumCulling();
     }
   }
 
@@ -4179,7 +3910,7 @@ class Game {
     if (this.ui.isGameplayBlocked() || this.levelReloadInProgress) {
       return;
     }
-    await this.reloadLevelWithLoading("Resetting district", { reuseWarmup: true });
+    await this.reloadLevelWithLoading("Loading district");
   }
 
   private async nextLevel(): Promise<void> {
@@ -4204,11 +3935,10 @@ class Game {
     return true;
   }
 
-  private async reloadLevelWithLoading(status: string, options: { reuseWarmup?: boolean } = {}): Promise<void> {
+  private async reloadLevelWithLoading(status: string): Promise<void> {
     this.levelReloadInProgress = true;
     void this.renderer.setAnimationLoop(null);
     const level = this.currentLevel();
-    const reuseWarmup = options.reuseWarmup === true && this.canReuseCurrentLevelWarmup();
     const blockOnWarmup = shouldBlockOnRenderWarmup();
     this.perfDiskLogger?.flush("level-reload-start");
     this.options.showLoading?.(level.name, status);
@@ -4216,22 +3946,13 @@ class Game {
     try {
       this.loadLevel();
       this.ui.hideScorePanel();
-      if (reuseWarmup && blockOnWarmup) {
-        this.physics.flushStagedVisualActivations(
-          RESET_WARMUP_STAGED_VISUAL_ACTIVATIONS_PER_FRAME,
-          RESET_WARMUP_STAGED_VISUAL_ACTIVATION_TIME_BUDGET_MS
-        );
-        this.status = `${level.name}: ${level.objective}`;
-        this.options.updateLoadingStatus?.("Preparing reset renderer pipelines");
-        await this.warmResetRuntimePipelines();
-      } else if (blockOnWarmup) {
+      if (blockOnWarmup) {
         this.scheduleRenderWarmup();
         this.options.updateLoadingStatus?.("Warming renderer pipelines");
         await this.waitForRenderWarmup();
       } else {
         this.renderWarmupToken += 1;
         this.renderWarmupPromise = null;
-        this.markCurrentLevelWarmupReady();
         this.renderWarmupState = this.createImmediateReadyWarmupState(performance.now());
         this.options.updateLoadingStatus?.("Ready");
       }
@@ -4247,14 +3968,6 @@ class Game {
         this.start();
       }
     }
-  }
-
-  private markCurrentLevelWarmupReady(): void {
-    this.warmedLevelIds.add(this.currentLevel().id);
-  }
-
-  private canReuseCurrentLevelWarmup(): boolean {
-    return this.renderWarmupState.phase === "ready" && this.warmedLevelIds.has(this.currentLevel().id);
   }
 
   private clearDebris(): void {
