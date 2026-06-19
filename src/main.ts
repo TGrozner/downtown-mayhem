@@ -2083,28 +2083,7 @@ class Game {
       this.scorePopups.update(delta * visualScale, this.cameraRig.camera);
       perfMonitor.addTiming("game.visualUpdate", startedAt);
       startedAt = perfMonitor.timeStart();
-      this.ui.update({
-        projectileId: this.selectedProjectile,
-        projectile: PROJECTILES[this.selectedProjectile],
-        shotAvailable: this.runState.shotAvailable,
-        canFinishRun: this.runState.phase === "spectacle" && !this.runState.score,
-        bodyCount: this.physics.getDynamicBodyCount(),
-        levelName: this.currentLevel().name,
-        levelDescription: this.currentLevel().description,
-        objective: this.currentLevel().objective,
-        chaosBrief: this.currentLevel().chaosBrief,
-        mission: this.currentLevel().mission,
-        levelIndex: this.levelIndex,
-        levelCount: TEST_CHAMBERS.length,
-        levels: this.levelOptions(),
-        levelProgress: this.currentLevelProgress(),
-        totalStars: this.arcadeProgress.totalStars,
-        arcadeResult: this.arcadeResult,
-        settings: this.settings,
-        status: this.status,
-        fps: this.displayedFps,
-        score: this.runState.score
-      });
+      this.updateHud();
       perfMonitor.addTiming("game.ui", startedAt);
       startedAt = perfMonitor.timeStart();
       const programsBeforeRender = rendererProgramCount(this.renderer);
@@ -2132,6 +2111,32 @@ class Game {
     perfMonitor.addCount("renderer.postWarmupProgramFrameAwakeBodies", physicsStats.awakeBodyCount);
     perfMonitor.addCount("renderer.postWarmupProgramFrameActiveDebris", physicsStats.activeDebrisCount);
     perfMonitor.addCount("renderer.postWarmupProgramFramePendingSupport", physicsStats.pendingSupportReleaseCount);
+  }
+
+  private updateHud(): void {
+    const level = this.currentLevel();
+    this.ui.update({
+      projectileId: this.selectedProjectile,
+      projectile: PROJECTILES[this.selectedProjectile],
+      shotAvailable: this.runState.shotAvailable,
+      canFinishRun: this.runState.phase === "spectacle" && !this.runState.score,
+      bodyCount: this.physics.getDynamicBodyCount(),
+      levelName: level.name,
+      levelDescription: level.description,
+      objective: level.objective,
+      chaosBrief: level.chaosBrief,
+      mission: level.mission,
+      levelIndex: this.levelIndex,
+      levelCount: TEST_CHAMBERS.length,
+      levels: this.levelOptions(),
+      levelProgress: this.currentLevelProgress(),
+      totalStars: this.arcadeProgress.totalStars,
+      arcadeResult: this.arcadeResult,
+      settings: this.settings,
+      status: this.status,
+      fps: this.displayedFps,
+      score: this.runState.score
+    });
   }
 
   private captureRenderStats(): DowntownMayhemRenderStats {
@@ -3868,8 +3873,10 @@ class Game {
       if (reuseWarmup) {
         this.physics.flushStagedVisualActivations(Number.POSITIVE_INFINITY, 0);
         this.status = `${level.name}: ${level.objective}`;
+        this.updateHud();
         this.options.updateLoadingStatus?.("Preparing reset renderer pipelines");
         await this.warmReusedLevelRuntimeScene();
+        this.updateHud();
         this.options.updateLoadingStatus?.("Ready");
       } else {
         this.scheduleRenderWarmup();
