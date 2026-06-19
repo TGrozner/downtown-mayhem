@@ -2716,13 +2716,14 @@ class Game {
     this.disposeRenderWarmupGroup();
     this.renderWarmupPersistentObjects.length = 0;
     const smokeMode = isSmokeWarmupMode();
+    const fastSmokeResetWarmup = smokeMode && !shouldIncludeFullPerfDiskReport();
     const brutalPasses = smokeMode ? 1 : RESET_WARMUP_BRUTAL_PASSES;
-    const framesPerBrutalPass = smokeMode ? 2 : RESET_WARMUP_FRAMES_PER_BRUTAL_PASS;
-    const syntheticPasses = smokeMode ? 1 : RESET_WARMUP_SYNTHETIC_DESTRUCTION_PASSES;
-    const syntheticFrames = smokeMode ? 2 : RESET_WARMUP_SYNTHETIC_DESTRUCTION_FRAMES;
-    const postCleanupEffectPasses = smokeMode ? 1 : RESET_WARMUP_POST_CLEANUP_EFFECT_PASSES;
-    const postCleanupEffectFrames = smokeMode ? 2 : RESET_WARMUP_POST_CLEANUP_EFFECT_FRAMES;
-    const settleFrames = smokeMode ? SMOKE_RESET_WARMUP_SETTLE_FRAMES : RESET_WARMUP_SETTLE_FRAMES;
+    const framesPerBrutalPass = fastSmokeResetWarmup ? 1 : smokeMode ? 2 : RESET_WARMUP_FRAMES_PER_BRUTAL_PASS;
+    const syntheticPasses = fastSmokeResetWarmup ? 0 : smokeMode ? 1 : RESET_WARMUP_SYNTHETIC_DESTRUCTION_PASSES;
+    const syntheticFrames = fastSmokeResetWarmup ? 0 : smokeMode ? 2 : RESET_WARMUP_SYNTHETIC_DESTRUCTION_FRAMES;
+    const postCleanupEffectPasses = fastSmokeResetWarmup ? 0 : smokeMode ? 1 : RESET_WARMUP_POST_CLEANUP_EFFECT_PASSES;
+    const postCleanupEffectFrames = fastSmokeResetWarmup ? 0 : smokeMode ? 2 : RESET_WARMUP_POST_CLEANUP_EFFECT_FRAMES;
+    const settleFrames = fastSmokeResetWarmup ? 1 : smokeMode ? SMOKE_RESET_WARMUP_SETTLE_FRAMES : RESET_WARMUP_SETTLE_FRAMES;
     let group: THREE.Group | null = null;
     let warmupCameras: THREE.PerspectiveCamera[] = [];
     let restoreFrustumCulling: (() => void) | null = null;
@@ -2797,7 +2798,7 @@ class Game {
     try {
       group = this.createRenderWarmupGroup();
       this.renderWarmupGroup = group;
-      warmupCameras = createRenderWarmupCameras(this.cameraRig.camera);
+      warmupCameras = fastSmokeResetWarmup ? [this.cameraRig.camera] : createRenderWarmupCameras(this.cameraRig.camera);
       runtimeWarmupObjectIds.push(...this.createRuntimeFragmentWarmupObjects());
       runtimeFragmentPipelineWarmupObjectIds.push(...this.destruction.createRuntimeFragmentPipelineWarmupObjects());
       restoreFrustumCulling = disableSceneFrustumCullingForWarmup(this.scene);
@@ -2829,17 +2830,19 @@ class Game {
           }
         }
       }
-      this.options.updateLoadingStatus?.("Rehearsing reset destruction");
-      if (
-        !(await this.runSyntheticDestructionWarmup(token, renderWarmupFrame, {
-          passes: syntheticPasses,
-          framesPerPass: syntheticFrames,
-          fractureProcessMaxPerFrame: RESET_WARMUP_FRACTURE_PROCESS_MAX_PER_FRAME,
-          fractureProcessTimeBudgetMs: RESET_WARMUP_FRACTURE_PROCESS_TIME_BUDGET_MS,
-          statusPrefix: "Preparing reset renderer pipelines"
-        }))
-      ) {
-        return;
+      if (syntheticPasses > 0) {
+        this.options.updateLoadingStatus?.("Rehearsing reset destruction");
+        if (
+          !(await this.runSyntheticDestructionWarmup(token, renderWarmupFrame, {
+            passes: syntheticPasses,
+            framesPerPass: syntheticFrames,
+            fractureProcessMaxPerFrame: RESET_WARMUP_FRACTURE_PROCESS_MAX_PER_FRAME,
+            fractureProcessTimeBudgetMs: RESET_WARMUP_FRACTURE_PROCESS_TIME_BUDGET_MS,
+            statusPrefix: "Preparing reset renderer pipelines"
+          }))
+        ) {
+          return;
+        }
       }
 
       cleanupTransientWarmup(true);
