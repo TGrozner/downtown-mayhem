@@ -1,3 +1,5 @@
+import { access, readFile, rm } from "node:fs/promises";
+import path from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
@@ -8,9 +10,11 @@ const LEVEL_START_TIMEOUT_MS = process.env.CI ? 60_000 : 30_000;
 const SCORE_REVEAL_TIMEOUT_MS = 45_000;
 const LONG_TEST_TIMEOUT_MS = 180_000;
 const RUN_FULL_SIMULATION_SMOKE = process.env.RUN_FULL_SIMULATION_SMOKE === "true";
+const RUN_PERF_SMOKE = process.env.DOWNTOWN_MAYHEM_PERF_SMOKE === "true";
 const SETTINGS_STORAGE_KEY = "downtown-mayhem:settings:v1";
 const ARCADE_PROGRESS_STORAGE_KEY = "downtown-mayhem:arcade-progress";
 const SMOKE_URL = "/?smoke=1";
+const PERF_SMOKE_URL = "/?smoke=1&perfFull=1";
 const STABLE_VISUAL_NOW = 1_710_000_000_000;
 const SMOKE_PERFORMANCE_SETTINGS = {
   graphicsQuality: "performance",
@@ -34,6 +38,13 @@ const HAZARD_JUNCTION_RENDER_BUDGET = {
   geometries: 1_780,
   textures: 36
 };
+const PERF_SMOKE_BUDGET = {
+  maxFrameMs: 360,
+  shotMaxFrameMs: 280,
+  slowRatioPercent: 35,
+  maxProgramsCreatedAfterWarmup: 2,
+  maxDroppedSubsteps: 8
+};
 
 interface RenderStats {
   frame: number;
@@ -50,6 +61,22 @@ interface RenderStats {
   programs: number;
   visibleMeshes: number;
   visibleMaterials: number;
+}
+
+interface PerfLogPayload {
+  href: string;
+  reason: string;
+  summary: {
+    frameCount: number;
+    slowFrameCount: number;
+    slowRatioPercent: number;
+    maxFrame: { totalMs: number } | null;
+    shotMax: { totalMs: number; droppedSubstepsInFrame: number };
+    shotTotals: { droppedSubsteps: number };
+  };
+  report?: {
+    counterTotals: Record<string, number>;
+  };
 }
 
 declare global {
@@ -226,6 +253,43 @@ test("selects a projectile, fires, then resets to a ready trial", async ({ page 
   expect(consoleErrors).toEqual([]);
 });
 
+test("records post-shot perf budgets", async ({ page }) => {
+  test.skip(!RUN_PERF_SMOKE, "Set DOWNTOWN_MAYHEM_PERF_SMOKE=true to run the perf smoke.");
+  test.setTimeout(LONG_TEST_TIMEOUT_MS);
+  const consoleErrors = trackRuntimeErrors(page);
+  await rm(perfLatestPath(), { force: true });
+
+  await useSmokePerformanceSettings(page);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto(PERF_SMOKE_URL);
+  await clickUi(page.locator("[data-action='start-arcade']").first());
+  await expectLevelReady(page, "Hazard Junction");
+  await expectRenderableCanvas(page);
+  await expect(page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getPerfReport())).resolves.toMatchObject({
+    enabled: true
+  });
+
+  await clickUi(page.getByRole("button", { name: "Frag" }));
+  await clickUi(fireButton(page));
+  const finishRunButton = page.locator("[data-action='finish-run']");
+  await expect(finishRunButton).toBeVisible({ timeout: SCORE_REVEAL_TIMEOUT_MS });
+  await clickUi(finishRunButton);
+  await expectFinalScore(page, "Fragmentation Cluster");
+  await page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.flushPerfLog("perf-smoke-final"));
+
+  const payload = await waitForPerfLog();
+  expect(payload.href).toContain("perfFull");
+  expect(payload.summary.frameCount).toBeGreaterThan(0);
+  expect(payload.summary.maxFrame?.totalMs ?? 0).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.maxFrameMs);
+  expect(payload.summary.shotMax.totalMs).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.shotMaxFrameMs);
+  expect(payload.summary.slowRatioPercent).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.slowRatioPercent);
+  expect(payload.summary.shotTotals.droppedSubsteps).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.maxDroppedSubsteps);
+  expect(payload.report?.counterTotals["renderer.programsCreatedAfterWarmup"] ?? 0).toBeLessThanOrEqual(
+    PERF_SMOKE_BUDGET.maxProgramsCreatedAfterWarmup
+  );
+  expect(consoleErrors).toEqual([]);
+});
+
 test("persists real settings and applies the FPS toggle after reload", async ({ page }) => {
   test.setTimeout(LONG_TEST_TIMEOUT_MS);
   const consoleErrors = trackRuntimeErrors(page);
@@ -382,6 +446,29 @@ async function expectFinalScore(page: Page, shotName: string): Promise<void> {
   await expect(scorePanel.locator(".hud__total strong")).toHaveText(/\d+/);
   await expect(scorePanel.getByText("Object damage")).toBeVisible();
   await expect(scorePanel.getByText("Collateral Chaos")).toBeVisible();
+}
+
+async function waitForPerfLog(): Promise<PerfLogPayload> {
+  const latestPath = perfLatestPath();
+  await expect
+    .poll(
+      async () => {
+        try {
+          await access(latestPath);
+          const payload = JSON.parse(await readFile(latestPath, "utf8")) as PerfLogPayload;
+          return payload.href.includes("perfFull") && payload.summary.frameCount > 0;
+        } catch {
+          return false;
+        }
+      },
+      { timeout: UI_READY_TIMEOUT_MS }
+    )
+    .toBe(true);
+  return JSON.parse(await readFile(latestPath, "utf8")) as PerfLogPayload;
+}
+
+function perfLatestPath(): string {
+  return path.resolve(process.cwd(), process.env.DOWNTOWN_MAYHEM_PERF_DIR ?? "test-results/perf-logs", "latest.json");
 }
 
 async function setRange(page: Page, setting: string, value: number): Promise<void> {

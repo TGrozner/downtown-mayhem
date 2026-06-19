@@ -8,6 +8,7 @@
     "test": "npm run test:unit && npm run test:smoke",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:smoke": "playwright test --config playwright.config.ts",
+    "test:perf": "DOWNTOWN_MAYHEM_PERF_SMOKE=true DOWNTOWN_MAYHEM_PERF_DIR=test-results/perf-logs playwright test --config playwright.config.ts --grep \"records post-shot perf budgets\"",
     "build": "tsc --noEmit && vite build",
     "build:pages": "BASE_PATH=/downtown-mayhem/ npm run build && npm run harden:dist",
     "harden:dist": "node scripts/harden-dist.mjs",

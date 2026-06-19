@@ -13,7 +13,22 @@ const MAX_RUBBLE_FREEZE_CENTER_Y = 0.78;
 const MAX_PHYSICS_SUBSTEPS_PER_FRAME = 2;
 const FROZEN_RUBBLE_BUCKET_CAPACITY = 512;
 const FROZEN_RUBBLE_BUCKET_TILE_SIZE = 12;
+const FROZEN_RUBBLE_BUCKET_CENTER_Y = 2.4;
+const FROZEN_RUBBLE_BUCKET_HALF_Y = 6;
+const FROZEN_RUBBLE_BUCKET_RADIUS = Math.hypot(
+  FROZEN_RUBBLE_BUCKET_TILE_SIZE * 0.5,
+  FROZEN_RUBBLE_BUCKET_HALF_Y,
+  FROZEN_RUBBLE_BUCKET_TILE_SIZE * 0.5
+);
 const STATIC_DETAIL_BUCKET_CAPACITY = 1024;
+const STATIC_DETAIL_BUCKET_TILE_SIZE = 24;
+const STATIC_DETAIL_BUCKET_CENTER_Y = 22;
+const STATIC_DETAIL_BUCKET_HALF_Y = 48;
+const STATIC_DETAIL_BUCKET_RADIUS = Math.hypot(
+  STATIC_DETAIL_BUCKET_TILE_SIZE * 0.5,
+  STATIC_DETAIL_BUCKET_HALF_Y,
+  STATIC_DETAIL_BUCKET_TILE_SIZE * 0.5
+);
 const STAGED_VISUAL_ACTIVATIONS_PER_FRAME = 32;
 const STAGED_VISUAL_ACTIVATION_MAX_MS = 0.7;
 const MAX_PENDING_CHAIN_COLLISION_EVENTS = 768;
@@ -22,8 +37,36 @@ const TRAFFIC_AVOIDANCE_PADDING = 0.38;
 const TRAFFIC_AVOIDANCE_MIN_DISTANCE = 1.05;
 const TRAFFIC_PLAN_CELL_SIZE = 4.5;
 const TRAFFIC_UP_AXIS = new THREE.Vector3(0, 1, 0);
+const COLLISION_LAYER_BITS: Record<PhysicsCollisionLayer, number> = {
+  surface: 1 << 0,
+  structure: 1 << 1,
+  projectile: 1 << 2,
+  "chain-debris": 1 << 3,
+  "passive-debris": 1 << 4
+};
+const COLLISION_LAYER_MASKS: Record<PhysicsCollisionLayer, number> = {
+  surface:
+    COLLISION_LAYER_BITS.projectile |
+    COLLISION_LAYER_BITS.structure |
+    COLLISION_LAYER_BITS["chain-debris"] |
+    COLLISION_LAYER_BITS["passive-debris"],
+  structure:
+    COLLISION_LAYER_BITS.surface |
+    COLLISION_LAYER_BITS.structure |
+    COLLISION_LAYER_BITS.projectile |
+    COLLISION_LAYER_BITS["chain-debris"] |
+    COLLISION_LAYER_BITS["passive-debris"],
+  projectile:
+    COLLISION_LAYER_BITS.surface |
+    COLLISION_LAYER_BITS.structure |
+    COLLISION_LAYER_BITS["chain-debris"] |
+    COLLISION_LAYER_BITS["passive-debris"],
+  "chain-debris": COLLISION_LAYER_BITS.surface | COLLISION_LAYER_BITS.structure | COLLISION_LAYER_BITS.projectile,
+  "passive-debris": COLLISION_LAYER_BITS.surface | COLLISION_LAYER_BITS.structure | COLLISION_LAYER_BITS.projectile
+};
 
 export type PhysicsCategory = "structure" | "projectile" | "debris";
+export type PhysicsCollisionLayer = "surface" | "structure" | "projectile" | "chain-debris" | "passive-debris";
 export type ScoreRole = "target" | "neutral";
 export type PhysicsBodyType = "dynamic" | "fixed";
 export type PhysicsShape = "box" | "sphere";
@@ -157,6 +200,8 @@ interface FrozenRubbleBucket {
   mesh: THREE.InstancedMesh;
   capacity: number;
   count: number;
+  tileX: number;
+  tileZ: number;
   refs: Array<FrozenRubbleRef | undefined>;
 }
 
@@ -181,6 +226,8 @@ interface StaticDetailBucket {
   mesh: THREE.InstancedMesh;
   capacity: number;
   count: number;
+  tileX: number;
+  tileZ: number;
   refs: Array<StaticDetailRef | undefined>;
 }
 
@@ -192,6 +239,7 @@ interface CompoundBoxColliderOptions {
   friction?: number;
   restitution?: number;
   collisionEvents?: boolean;
+  collisionLayer?: PhysicsCollisionLayer;
 }
 
 interface DynamicBoxOptions {
@@ -212,6 +260,7 @@ interface DynamicBoxOptions {
   linearVelocity?: THREE.Vector3;
   angularVelocity?: THREE.Vector3;
   category?: PhysicsCategory;
+  collisionLayer?: PhysicsCollisionLayer;
   scoreValue?: number;
   scoreRole?: ScoreRole;
   zoneId?: string;
@@ -243,6 +292,7 @@ interface StaticBoxOptions {
   size: THREE.Vector3;
   material: THREE.Material;
   visible?: boolean;
+  collisionLayer?: PhysicsCollisionLayer;
 }
 
 interface DynamicSphereOptions {
@@ -258,6 +308,7 @@ interface DynamicSphereOptions {
   linearVelocity?: THREE.Vector3;
   angularVelocity?: THREE.Vector3;
   category?: PhysicsCategory;
+  collisionLayer?: PhysicsCollisionLayer;
   scoreValue?: number;
   scoreRole?: ScoreRole;
   zoneId?: string;
@@ -317,6 +368,7 @@ export class PhysicsWorld {
   private readonly trafficApplyRotation = new THREE.Quaternion();
   private readonly trafficApplyVelocity = new THREE.Vector3();
   private readonly preStepVelocities = new Map<number, MotionSample>();
+  private readonly preStepVelocitySamples = new Map<number, MotionSample>();
   private readonly surfaceColliderLabels = new Map<number, string>();
   private readonly releasedSupportGroups = new Set<string>();
   private readonly pendingCollisionEvents: Array<{ firstId: number; secondId: number; started: boolean; key: string }> = [];
@@ -441,7 +493,9 @@ export class PhysicsWorld {
       options.size.x * 0.5,
       options.size.y * 0.5,
       options.size.z * 0.5
-    ).setFriction(0.95);
+    )
+      .setFriction(0.95)
+      .setCollisionGroups(collisionGroupsForLayer(options.collisionLayer ?? "surface"));
     const collider = this.world.createCollider(colliderDesc, body);
     this.surfaceColliderLabels.set(collider.handle, options.label);
 
@@ -461,6 +515,9 @@ export class PhysicsWorld {
     const startedAt = perfMonitor.timeStart();
     const rotation = options.rotation ?? new THREE.Quaternion();
     const bodyType = options.bodyType ?? "dynamic";
+    const category = options.category ?? (options.isDebris ? "debris" : "structure");
+    const chainSource = options.chainSource ?? false;
+    const collisionLayer = options.collisionLayer ?? defaultCollisionLayer(category, options.isDebris, chainSource);
     const bodyDesc = (bodyType === "fixed" ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic())
       .setTranslation(options.position.x, options.position.y, options.position.z)
       .setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w });
@@ -493,7 +550,8 @@ export class PhysicsWorld {
     )
       .setDensity(options.density ?? options.material.density)
       .setFriction(options.friction ?? options.material.friction)
-      .setRestitution(options.restitution ?? options.material.restitution);
+      .setRestitution(options.restitution ?? options.material.restitution)
+      .setCollisionGroups(collisionGroupsForLayer(collisionLayer));
     const collisionEventsEnabled = shouldEnableBoxCollisionEvents(options, bodyType);
     if (collisionEventsEnabled) {
       colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
@@ -510,7 +568,8 @@ export class PhysicsWorld {
         .setTranslation(compound.offset.x, compound.offset.y, compound.offset.z)
         .setDensity(compound.density ?? options.density ?? options.material.density)
         .setFriction(compound.friction ?? options.friction ?? options.material.friction)
-        .setRestitution(compound.restitution ?? options.restitution ?? options.material.restitution);
+        .setRestitution(compound.restitution ?? options.restitution ?? options.material.restitution)
+        .setCollisionGroups(collisionGroupsForLayer(compound.collisionLayer ?? collisionLayer));
       if (compound.rotation) {
         compoundDesc.setRotation({
           x: compound.rotation.x,
@@ -563,9 +622,9 @@ export class PhysicsWorld {
       fractureResistance: Math.max(0.1, options.fractureResistance ?? 1),
       isDebris: options.isDebris ?? false,
       createdAt: performance.now(),
-      category: options.category ?? (options.isDebris ? "debris" : "structure"),
+      category,
       scoreValue: options.scoreValue ?? scoreValueForSize(options.size),
-      scoreRole: options.scoreRole ?? defaultScoreRole(options.category, options.isDebris),
+      scoreRole: options.scoreRole ?? defaultScoreRole(category, options.isDebris),
       zoneId: options.zoneId,
       supportGroupId: options.supportGroupId,
       supportReleaseRadius: options.supportReleaseRadius,
@@ -576,7 +635,7 @@ export class PhysicsWorld {
       supportReleaseMassScale: options.supportReleaseMassScale,
       radius: options.size.length() * 0.5,
       bodyType,
-      chainSource: options.chainSource ?? false,
+      chainSource,
       shape: "box",
       trafficRoute: options.trafficRoute ? { ...options.trafficRoute } : undefined,
       colliderHandles,
@@ -610,6 +669,9 @@ export class PhysicsWorld {
 
   addDynamicSphere(options: DynamicSphereOptions): PhysicsObject {
     const startedAt = perfMonitor.timeStart();
+    const category = options.category ?? (options.isDebris ? "debris" : "structure");
+    const chainSource = options.chainSource ?? false;
+    const collisionLayer = options.collisionLayer ?? defaultCollisionLayer(category, options.isDebris, chainSource);
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(options.position.x, options.position.y, options.position.z)
       .setCanSleep(true)
@@ -633,7 +695,8 @@ export class PhysicsWorld {
     const colliderDesc = RAPIER.ColliderDesc.ball(options.radius)
       .setDensity(options.density ?? options.material.density)
       .setFriction(options.friction ?? options.material.friction)
-      .setRestitution(options.restitution ?? options.material.restitution);
+      .setRestitution(options.restitution ?? options.material.restitution)
+      .setCollisionGroups(collisionGroupsForLayer(collisionLayer));
     if (shouldEnableSphereCollisionEvents(options)) {
       colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     }
@@ -665,13 +728,13 @@ export class PhysicsWorld {
       fractureResistance: Math.max(0.1, options.fractureResistance ?? 1),
       isDebris: options.isDebris ?? false,
       createdAt: performance.now(),
-      category: options.category ?? (options.isDebris ? "debris" : "structure"),
+      category,
       scoreValue: options.scoreValue ?? scoreValueForSize(dimensions),
-      scoreRole: options.scoreRole ?? defaultScoreRole(options.category, options.isDebris),
+      scoreRole: options.scoreRole ?? defaultScoreRole(category, options.isDebris),
       zoneId: options.zoneId,
       radius: options.radius,
       bodyType: "dynamic",
-      chainSource: options.chainSource ?? false,
+      chainSource,
       shape: "sphere",
       colliderHandles: [collider.handle]
     };
@@ -843,7 +906,7 @@ export class PhysicsWorld {
     let updated = 0;
     for (const bucket of this.dirtyFrozenRubbleBuckets) {
       if (bucket.count > 0) {
-        bucket.mesh.computeBoundingSphere();
+        bucket.mesh.boundingSphere = frozenRubbleBucketBoundingSphere(bucket.tileX, bucket.tileZ);
         bucket.mesh.frustumCulled = true;
         updated += 1;
       } else {
@@ -1158,6 +1221,7 @@ export class PhysicsWorld {
     this.trafficObjectIds.delete(object.id);
     this.trafficWaitTicks.delete(object.id);
     this.preStepVelocities.delete(object.id);
+    this.preStepVelocitySamples.delete(object.id);
     this.world.removeRigidBody(object.body);
     this.objects.delete(object.id);
   }
@@ -1186,6 +1250,8 @@ export class PhysicsWorld {
     this.clearStagedVisualActivationQueue();
     this.releasedSupportGroups.clear();
     this.clearPendingEvents();
+    this.preStepVelocities.clear();
+    this.preStepVelocitySamples.clear();
     this.clearFrozenDebris();
     this.disposeStaticDetailBuckets();
   }
@@ -1499,7 +1565,8 @@ export class PhysicsWorld {
   }
 
   private getFrozenRubbleBucket(part: FrozenRubblePart): FrozenRubbleBucket {
-    const key = frozenRubbleSpatialBucketKey(part);
+    const tile = matrixTileCoordinate(part.matrix, FROZEN_RUBBLE_BUCKET_TILE_SIZE);
+    const key = frozenRubbleSpatialBucketKey(part, tile.x, tile.z);
     let buckets = this.frozenRubbleBuckets.get(key);
     if (!buckets) {
       buckets = [];
@@ -1515,7 +1582,8 @@ export class PhysicsWorld {
     mesh.castShadow = part.castShadow;
     mesh.receiveShadow = part.receiveShadow;
     mesh.renderOrder = part.renderOrder;
-    mesh.frustumCulled = false;
+    mesh.frustumCulled = true;
+    mesh.boundingSphere = frozenRubbleBucketBoundingSphere(tile.x, tile.z);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(mesh);
     const bucket: FrozenRubbleBucket = {
@@ -1523,6 +1591,8 @@ export class PhysicsWorld {
       mesh,
       capacity: FROZEN_RUBBLE_BUCKET_CAPACITY,
       count: 0,
+      tileX: tile.x,
+      tileZ: tile.z,
       refs: new Array(FROZEN_RUBBLE_BUCKET_CAPACITY)
     };
     buckets.push(bucket);
@@ -1572,7 +1642,6 @@ export class PhysicsWorld {
   }
 
   private markFrozenRubbleBucketDirty(bucket: FrozenRubbleBucket): void {
-    bucket.mesh.frustumCulled = false;
     this.dirtyFrozenRubbleBuckets.add(bucket);
   }
 
@@ -1625,7 +1694,8 @@ export class PhysicsWorld {
   }
 
   private getStaticDetailBucket(part: FrozenRubblePart): StaticDetailBucket {
-    const key = frozenRubbleBucketKey(part);
+    const tile = matrixTileCoordinate(part.matrix, STATIC_DETAIL_BUCKET_TILE_SIZE);
+    const key = staticDetailSpatialBucketKey(part, tile.x, tile.z);
     let buckets = this.staticDetailBuckets.get(key);
     if (!buckets) {
       buckets = [];
@@ -1641,7 +1711,8 @@ export class PhysicsWorld {
     mesh.castShadow = part.castShadow;
     mesh.receiveShadow = part.receiveShadow;
     mesh.renderOrder = part.renderOrder;
-    mesh.frustumCulled = false;
+    mesh.frustumCulled = true;
+    mesh.boundingSphere = staticDetailBucketBoundingSphere(tile.x, tile.z);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(mesh);
     const bucket: StaticDetailBucket = {
@@ -1649,6 +1720,8 @@ export class PhysicsWorld {
       mesh,
       capacity: STATIC_DETAIL_BUCKET_CAPACITY,
       count: 0,
+      tileX: tile.x,
+      tileZ: tile.z,
       refs: new Array(STATIC_DETAIL_BUCKET_CAPACITY)
     };
     buckets.push(bucket);
@@ -1662,7 +1735,7 @@ export class PhysicsWorld {
         if (bucket.count <= 0) {
           continue;
         }
-        bucket.mesh.computeBoundingSphere();
+        bucket.mesh.boundingSphere = staticDetailBucketBoundingSphere(bucket.tileX, bucket.tileZ);
         bucket.mesh.frustumCulled = true;
       }
     }
@@ -1827,7 +1900,15 @@ export class PhysicsWorld {
         !object.body.isSleeping()
       ) {
         const velocity = object.body.linvel();
-        this.preStepVelocities.set(id, { x: velocity.x, y: velocity.y, z: velocity.z });
+        let sample = this.preStepVelocitySamples.get(id);
+        if (!sample) {
+          sample = { x: 0, y: 0, z: 0 };
+          this.preStepVelocitySamples.set(id, sample);
+        }
+        sample.x = velocity.x;
+        sample.y = velocity.y;
+        sample.z = velocity.z;
+        this.preStepVelocities.set(id, sample);
       }
     }
   }
@@ -1972,11 +2053,42 @@ function frozenRubbleBucketKey(part: FrozenRubblePart): string {
   return `${part.geometry.uuid}:${part.material.uuid}:${part.renderOrder}:${part.castShadow ? 1 : 0}:${part.receiveShadow ? 1 : 0}`;
 }
 
-function frozenRubbleSpatialBucketKey(part: FrozenRubblePart): string {
-  const elements = part.matrix.elements;
-  const tileX = Math.floor(elements[12] / FROZEN_RUBBLE_BUCKET_TILE_SIZE);
-  const tileZ = Math.floor(elements[14] / FROZEN_RUBBLE_BUCKET_TILE_SIZE);
+function frozenRubbleSpatialBucketKey(part: FrozenRubblePart, tileX: number, tileZ: number): string {
   return `${frozenRubbleBucketKey(part)}:${tileX}:${tileZ}`;
+}
+
+function staticDetailSpatialBucketKey(part: FrozenRubblePart, tileX: number, tileZ: number): string {
+  return `${frozenRubbleBucketKey(part)}:${tileX}:${tileZ}`;
+}
+
+function matrixTileCoordinate(matrix: THREE.Matrix4, tileSize: number): { x: number; z: number } {
+  const elements = matrix.elements;
+  return {
+    x: Math.floor(elements[12] / tileSize),
+    z: Math.floor(elements[14] / tileSize)
+  };
+}
+
+function frozenRubbleBucketBoundingSphere(tileX: number, tileZ: number): THREE.Sphere {
+  return new THREE.Sphere(
+    new THREE.Vector3(
+      (tileX + 0.5) * FROZEN_RUBBLE_BUCKET_TILE_SIZE,
+      FROZEN_RUBBLE_BUCKET_CENTER_Y,
+      (tileZ + 0.5) * FROZEN_RUBBLE_BUCKET_TILE_SIZE
+    ),
+    FROZEN_RUBBLE_BUCKET_RADIUS
+  );
+}
+
+function staticDetailBucketBoundingSphere(tileX: number, tileZ: number): THREE.Sphere {
+  return new THREE.Sphere(
+    new THREE.Vector3(
+      (tileX + 0.5) * STATIC_DETAIL_BUCKET_TILE_SIZE,
+      STATIC_DETAIL_BUCKET_CENTER_Y,
+      (tileZ + 0.5) * STATIC_DETAIL_BUCKET_TILE_SIZE
+    ),
+    STATIC_DETAIL_BUCKET_RADIUS
+  );
 }
 
 function vectorLengthSq(v: { x: number; y: number; z: number }): number {
@@ -2291,6 +2403,28 @@ function defaultScoreRole(category?: PhysicsCategory, isDebris?: boolean): Score
     return "neutral";
   }
   return "target";
+}
+
+function defaultCollisionLayer(
+  category: PhysicsCategory,
+  isDebris: boolean | undefined,
+  chainSource: boolean
+): PhysicsCollisionLayer {
+  if (category === "projectile") {
+    return "projectile";
+  }
+  if (category === "debris" || isDebris) {
+    return chainSource ? "chain-debris" : "passive-debris";
+  }
+  return "structure";
+}
+
+function collisionGroupsForLayer(layer: PhysicsCollisionLayer): number {
+  return interactionGroups(COLLISION_LAYER_BITS[layer], COLLISION_LAYER_MASKS[layer]);
+}
+
+function interactionGroups(membership: number, filter: number): number {
+  return (membership << 16) | filter;
 }
 
 function shouldEnableBoxCollisionEvents(options: DynamicBoxOptions, bodyType: PhysicsBodyType): boolean {

@@ -1441,6 +1441,8 @@ interface PerfFrameSummary {
   totalMs: number;
   deltaMs: number;
   bodyCount: number;
+  accountedMs: number;
+  unattributedMs: number;
   renderMs: number;
   physicsStepMs: number;
   rapierMs: number;
@@ -1452,6 +1454,8 @@ interface PerfFrameSummary {
   fragments: number;
   dynamicBoxes: number;
   particles: number;
+  visualOnlyFragments: number;
+  physicalFragments: number;
   boxCacheMiss: number;
   childBoxCacheMiss: number;
   frozenRubbleBuckets: number;
@@ -1474,6 +1478,8 @@ interface PerfDiskLogSummary {
     queuedFractureMs: number;
     addBoxMs: number;
     particlesInFrame: number;
+    visualOnlyFragmentsInFrame: number;
+    physicalFragmentsInFrame: number;
     fragmentsInFrame: number;
     boxCacheMissesInFrame: number;
     childBoxCacheMissesInFrame: number;
@@ -1483,6 +1489,8 @@ interface PerfDiskLogSummary {
     fragments: number;
     dynamicBoxes: number;
     particles: number;
+    visualOnlyFragments: number;
+    physicalFragments: number;
     boxCacheMisses: number;
     childBoxCacheMisses: number;
     frozenRubbleBuckets: number;
@@ -1598,6 +1606,8 @@ function summarizePerfReport(report: PerfReport): PerfDiskLogSummary {
       queuedFractureMs: maxPerfValue(shotFrames, (frame) => frame.timings["destruction.processQueuedFractures"]),
       addBoxMs: maxPerfValue(shotFrames, (frame) => frame.timings["physics.addDynamicBox"]),
       particlesInFrame: maxPerfValue(shotFrames, (frame) => frame.counters["vfx.particlesSpawned"]),
+      visualOnlyFragmentsInFrame: maxPerfValue(shotFrames, (frame) => frame.counters["destruction.visualOnlyFragmentsCreated"]),
+      physicalFragmentsInFrame: maxPerfValue(shotFrames, (frame) => frame.counters["destruction.physicalFragmentsCreated"]),
       fragmentsInFrame: maxPerfValue(shotFrames, (frame) => frame.counters["destruction.fragmentsCreated"]),
       boxCacheMissesInFrame: maxPerfValue(shotFrames, (frame) => frame.counters["render.boxGeometryCacheMiss"]),
       childBoxCacheMissesInFrame: maxPerfValue(shotFrames, (frame) => frame.counters["render.childBoxGeometryCacheMiss"]),
@@ -1607,6 +1617,8 @@ function summarizePerfReport(report: PerfReport): PerfDiskLogSummary {
       fragments: sumPerfValue(shotFrames, (frame) => frame.counters["destruction.fragmentsCreated"]),
       dynamicBoxes: sumPerfValue(shotFrames, (frame) => frame.counters["physics.dynamicBoxesAdded"]),
       particles: sumPerfValue(shotFrames, (frame) => frame.counters["vfx.particlesSpawned"]),
+      visualOnlyFragments: sumPerfValue(shotFrames, (frame) => frame.counters["destruction.visualOnlyFragmentsCreated"]),
+      physicalFragments: sumPerfValue(shotFrames, (frame) => frame.counters["destruction.physicalFragmentsCreated"]),
       boxCacheMisses: sumPerfValue(shotFrames, (frame) => frame.counters["render.boxGeometryCacheMiss"]),
       childBoxCacheMisses: sumPerfValue(shotFrames, (frame) => frame.counters["render.childBoxGeometryCacheMiss"]),
       frozenRubbleBuckets: sumPerfValue(shotFrames, (frame) => frame.counters["physics.frozenRubbleBucketsCreated"]),
@@ -1624,6 +1636,8 @@ function summarizePerfFrame(frame: PerfFrameSnapshot): PerfFrameSummary {
     totalMs: frame.totalMs,
     deltaMs: frame.deltaMs,
     bodyCount: frame.bodyCount,
+    accountedMs: frame.accountedMs,
+    unattributedMs: frame.unattributedMs,
     renderMs: frame.timings["renderer.render"] ?? 0,
     physicsStepMs: frame.timings["physics.step"] ?? 0,
     rapierMs: frame.timings["physics.rapierStep"] ?? 0,
@@ -1635,6 +1649,8 @@ function summarizePerfFrame(frame: PerfFrameSnapshot): PerfFrameSummary {
     fragments: frame.counters["destruction.fragmentsCreated"] ?? 0,
     dynamicBoxes: frame.counters["physics.dynamicBoxesAdded"] ?? 0,
     particles: frame.counters["vfx.particlesSpawned"] ?? 0,
+    visualOnlyFragments: frame.counters["destruction.visualOnlyFragmentsCreated"] ?? 0,
+    physicalFragments: frame.counters["destruction.physicalFragmentsCreated"] ?? 0,
     boxCacheMiss: frame.counters["render.boxGeometryCacheMiss"] ?? 0,
     childBoxCacheMiss: frame.counters["render.childBoxGeometryCacheMiss"] ?? 0,
     frozenRubbleBuckets: frame.counters["physics.frozenRubbleBucketsCreated"] ?? 0,
@@ -1742,7 +1758,6 @@ class Game {
   private readonly cannonBatteryObjects: THREE.Object3D[] = [];
   private readonly levelDecorations: THREE.Object3D[] = [];
   private renderWarmupGroup: THREE.Group | null = null;
-  private renderPipelineSentinelGroup: THREE.Group | null = null;
   private readonly renderWarmupPersistentObjects: THREE.Object3D[] = [];
   private readonly warmedLevelIds = new Set<string>();
   private readonly handleResize = () => this.resize();
@@ -1921,12 +1936,12 @@ class Game {
     this.input.dispose();
     this.scorePopups.dispose();
     this.particles.dispose();
+    this.destruction.clearVisualFragments();
     this.projectiles.clearActive();
     this.physics.clearDynamic();
     this.physics.clearStatics();
     this.clearLevelDecorations();
     this.disposeRenderWarmupGroup();
-    this.disposeRenderPipelineSentinels();
     const disposedObjects = new Set<THREE.Object3D>();
     const disposedMaterials = new Set<THREE.Material>();
     for (const object of this.arenaObjects) {
@@ -2011,17 +2026,22 @@ class Game {
       startedAt = perfMonitor.timeStart();
       this.updatePhase();
       perfMonitor.addTiming("game.updatePhase", startedAt);
+      startedAt = perfMonitor.timeStart();
       this.destruction.processQueuedFractures(FRACTURE_PROCESS_MAX_PER_FRAME, FRACTURE_PROCESS_TIME_BUDGET_MS);
+      this.destruction.updateVisualFragments(delta * visualScale);
       this.physics.flushStagedVisualActivations(8, 0.25);
       this.destruction.flushFragmentInstanceBounds();
       this.physics.flushInstancedRenderBounds();
+      perfMonitor.addTiming("game.flushWork", startedAt);
 
       startedAt = perfMonitor.timeStart();
       this.particles.update(delta * visualScale);
       perfMonitor.addTiming("vfx.update", startedAt);
+      startedAt = perfMonitor.timeStart();
       this.cameraRig.update(delta * visualScale);
       this.updateAimMarker();
       this.scorePopups.update(delta * visualScale, this.cameraRig.camera);
+      perfMonitor.addTiming("game.visualUpdate", startedAt);
       startedAt = perfMonitor.timeStart();
       this.ui.update({
         projectileId: this.selectedProjectile,
@@ -2269,6 +2289,7 @@ class Game {
     this.invalidateAimSurfaceTargets();
     this.projectiles.clearActive();
     this.destruction.clearQueuedFractures();
+    this.destruction.clearVisualFragments();
     this.chainImpactCooldowns.clear();
     this.surfaceImpactCooldowns.clear();
     this.triggeredHazards.clear();
@@ -2313,7 +2334,6 @@ class Game {
     const token = this.renderWarmupToken + 1;
     this.renderWarmupToken = token;
     this.disposeRenderWarmupGroup();
-    this.disposeRenderPipelineSentinels();
     this.renderWarmupPersistentObjects.length = 0;
     const group = this.createRenderWarmupGroup();
     this.renderWarmupGroup = group;
@@ -2392,7 +2412,6 @@ class Game {
     const warmupCameras = createRenderWarmupCameras(this.cameraRig.camera);
     const runtimeWarmupObjectIds = this.createRuntimeFragmentWarmupObjects();
     const runtimeFragmentPipelineWarmupObjectIds = this.destruction.createRuntimeFragmentPipelineWarmupObjects();
-    let runtimeWarmupPreserved = false;
     const cleanupTransientWarmup = (
       preserveFrozenRubbleWarmup = false,
       preserveParticlePools = false,
@@ -2400,9 +2419,7 @@ class Game {
     ): void => {
       this.destruction.parkFragmentVisualWarmupPreview();
       this.clearRuntimeWarmupObjects(runtimeFragmentPipelineWarmupObjectIds);
-      if (!runtimeWarmupPreserved) {
-        this.clearRuntimeWarmupObjects(runtimeWarmupObjectIds);
-      }
+      this.clearRuntimeWarmupObjects(runtimeWarmupObjectIds);
       if (!preserveFrozenRubbleWarmup) {
         this.physics.clearFrozenRubbleWarmupObjects();
       }
@@ -2481,13 +2498,7 @@ class Game {
           stableFrames = 0;
         }
       }
-      group.position.set(0, -10000, 0);
-      group.updateMatrixWorld(true);
-      group.visible = false;
-      this.preserveRuntimeWarmupObjects(runtimeWarmupObjectIds);
-      this.preserveRenderWarmupPersistentObjects();
-      runtimeWarmupPreserved = true;
-      cleanupTransientWarmup(true, true, true);
+      cleanupTransientWarmup(false, true, false);
       restoreFrustumCulling();
       this.status = "Preparing renderer pipelines before impact (settling runtime scene).";
       lastProgramCount = rendererProgramCount(this.renderer);
@@ -2651,60 +2662,6 @@ class Game {
     return objectIds;
   }
 
-  private preserveRuntimeWarmupObjects(objectIds: number[]): void {
-    if (objectIds.length === 0) {
-      return;
-    }
-    const group = this.ensureRenderPipelineSentinelGroup();
-    for (let index = 0; index < objectIds.length; index += 1) {
-      const objectId = objectIds[index];
-      const mesh = this.physics.detachObjectForRenderWarmup(objectId);
-      if (!mesh) {
-        continue;
-      }
-      mesh.name = `${mesh.name} sentinel`;
-      mesh.visible = true;
-      mesh.position.set((index % RENDER_WARMUP_FRAGMENT_MATERIALS.length) * 0.18, -10000, Math.floor(index / RENDER_WARMUP_FRAGMENT_MATERIALS.length) * 0.18);
-      mesh.updateMatrixWorld(true);
-      disableFrustumCulling(mesh);
-      group.add(mesh);
-    }
-    objectIds.length = 0;
-  }
-
-  private preserveRenderWarmupPersistentObjects(): void {
-    if (this.renderWarmupPersistentObjects.length === 0) {
-      return;
-    }
-    const group = this.ensureRenderPipelineSentinelGroup();
-    let index = 0;
-    while (this.renderWarmupPersistentObjects.length > 0) {
-      const object = this.renderWarmupPersistentObjects.pop();
-      if (!object) {
-        continue;
-      }
-      object.name = `${object.name || "render warmup"} sentinel`;
-      object.visible = true;
-      object.position.set((index % 18) * 0.16 - 1.36, -10000, Math.floor(index / 18) * 0.16);
-      object.updateMatrixWorld(true);
-      disableFrustumCulling(object);
-      group.add(object);
-      index += 1;
-    }
-  }
-
-  private ensureRenderPipelineSentinelGroup(): THREE.Group {
-    if (this.renderPipelineSentinelGroup) {
-      return this.renderPipelineSentinelGroup;
-    }
-    const group = new THREE.Group();
-    group.name = "Persistent render pipeline sentinels";
-    group.frustumCulled = false;
-    this.renderPipelineSentinelGroup = group;
-    this.scene.add(group);
-    return group;
-  }
-
   private clearRuntimeWarmupObjects(objectIds: number[]): void {
     while (objectIds.length > 0) {
       const objectId = objectIds.pop();
@@ -2815,17 +2772,8 @@ class Game {
       this.physics.removeObject(objectId);
     }
     this.destruction.clearQueuedFractures();
+    this.destruction.clearVisualFragments();
     this.physics.clearFrozenRubbleWarmupObjects();
-  }
-
-  private disposeRenderPipelineSentinels(): void {
-    const group = this.renderPipelineSentinelGroup;
-    if (!group) {
-      return;
-    }
-    group.parent?.remove(group);
-    this.disposeRenderWarmupOwnedResources(group);
-    this.renderPipelineSentinelGroup = null;
   }
 
   private playRenderWarmupEffects(pass = 0): void {
@@ -2877,6 +2825,7 @@ class Game {
     group.parent?.remove(group);
     this.disposeRenderWarmupOwnedResources(group);
     this.renderWarmupGroup = null;
+    this.renderWarmupPersistentObjects.length = 0;
   }
 
   private disposeRenderWarmupOwnedResources(root: THREE.Object3D): void {

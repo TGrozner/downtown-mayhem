@@ -37,5 +37,9 @@ export function randomInt(rng: RandomSource, min: number, max: number): number {
 }
 
 export function randomUnitVector(rng: RandomSource): THREE.Vector3 {
-  return new THREE.Vector3(rng.next() - 0.5, rng.next() - 0.2, rng.next() - 0.5).normalize();
+  return randomUnitVectorInto(new THREE.Vector3(), rng);
+}
+
+export function randomUnitVectorInto(target: THREE.Vector3, rng: RandomSource): THREE.Vector3 {
+  return target.set(rng.next() - 0.5, rng.next() - 0.2, rng.next() - 0.5).normalize();
 }

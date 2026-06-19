@@ -3,6 +3,8 @@ export interface PerfFrameSnapshot {
   totalMs: number;
   deltaMs: number;
   bodyCount: number;
+  accountedMs: number;
+  unattributedMs: number;
   timings: Record<string, number>;
   counters: Record<string, number>;
 }
@@ -20,6 +22,20 @@ export interface PerfReport {
 
 const SLOW_FRAME_MS = 24;
 const MAX_SLOW_FRAMES = 80;
+const ACCOUNTED_TIMING_NAMES = new Set([
+  "game.cannon",
+  "physics.traffic",
+  "physics.step",
+  "game.projectiles",
+  "game.processDebrisImpacts",
+  "game.updateBurningHazards",
+  "game.updatePhase",
+  "game.flushWork",
+  "vfx.update",
+  "game.visualUpdate",
+  "game.ui",
+  "renderer.render"
+]);
 
 class PerfMonitor {
   private enabled = shouldEnablePerfMonitor();
@@ -54,6 +70,8 @@ class PerfMonitor {
       totalMs: 0,
       deltaMs,
       bodyCount,
+      accountedMs: 0,
+      unattributedMs: 0,
       timings: {},
       counters: {}
     };
@@ -86,6 +104,8 @@ class PerfMonitor {
       return;
     }
     this.currentFrame.totalMs = performance.now() - this.frameStartedAt;
+    this.currentFrame.accountedMs = sumAccountedTimings(this.currentFrame.timings);
+    this.currentFrame.unattributedMs = Math.max(0, this.currentFrame.totalMs - this.currentFrame.accountedMs);
     const frame = cloneFrame(this.currentFrame);
     if (!this.maxFrame || frame.totalMs > this.maxFrame.totalMs) {
       this.maxFrame = frame;
@@ -143,10 +163,15 @@ export const perfMonitor = new PerfMonitor();
 
 function shouldEnablePerfMonitor(): boolean {
   try {
-    return new URLSearchParams(globalThis.location?.search ?? "").has("perf");
+    return shouldEnablePerfFromSearch(globalThis.location?.search ?? "");
   } catch {
     return false;
   }
+}
+
+export function shouldEnablePerfFromSearch(search: string): boolean {
+  const params = new URLSearchParams(search);
+  return params.has("perf") || params.has("perfFull");
 }
 
 function cloneFrame(frame: PerfFrameSnapshot): PerfFrameSnapshot {
@@ -155,9 +180,21 @@ function cloneFrame(frame: PerfFrameSnapshot): PerfFrameSnapshot {
     totalMs: round(frame.totalMs),
     deltaMs: round(frame.deltaMs),
     bodyCount: frame.bodyCount,
+    accountedMs: round(frame.accountedMs),
+    unattributedMs: round(frame.unattributedMs),
     timings: roundRecord(frame.timings),
     counters: { ...frame.counters }
   };
+}
+
+function sumAccountedTimings(record: Record<string, number>): number {
+  let total = 0;
+  for (const [name, value] of Object.entries(record)) {
+    if (ACCOUNTED_TIMING_NAMES.has(name)) {
+      total += value;
+    }
+  }
+  return total;
 }
 
 function roundRecord(record: Record<string, number>): Record<string, number> {

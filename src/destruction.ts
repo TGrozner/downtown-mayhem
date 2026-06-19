@@ -3,10 +3,21 @@ import { fragmentDecorationParts } from "./cityVisuals";
 import { MaterialCatalog, type MaterialDefinition, type MaterialId } from "./materialCatalog";
 import { perfMonitor } from "./perf";
 import { PhysicsWorld, type DynamicVisualProxy, type FrozenVisualHandle, type PhysicsCategory, type PhysicsObject, type ScoreRole } from "./physics";
-import { type RandomSource, randomInt, randomRange, randomUnitVector } from "./random";
+import { type RandomSource, randomInt, randomRange, randomUnitVectorInto } from "./random";
 
 const IMMEDIATE_PRIMARY_FRAGMENT_VISUALS = 6;
 const IMMEDIATE_DEBRIS_FRAGMENT_VISUALS = 3;
+const PRIMARY_PHYSICAL_FRAGMENT_LIMIT = 8;
+const SECONDARY_PHYSICAL_FRAGMENT_LIMIT = 3;
+const MIN_PHYSICAL_FRAGMENT_VOLUME = 0.012;
+const MAX_VISUAL_ONLY_FRAGMENTS = 820;
+const VISUAL_FRAGMENT_MIN_LIFE_SECONDS = 5.5;
+const VISUAL_FRAGMENT_MAX_LIFE_SECONDS = 9.5;
+const VISUAL_FRAGMENT_SETTLE_SPEED_SQ = 0.08;
+const VISUAL_FRAGMENT_GRAVITY = 8.4;
+const VISUAL_FRAGMENT_LINEAR_DAMPING = 0.82;
+const VISUAL_FRAGMENT_ANGULAR_DAMPING = 0.84;
+const VISUAL_FRAGMENT_BOUNCE = 0.18;
 const FRAGMENT_INSTANCE_BUCKET_CAPACITY = 512;
 const FRAGMENT_INSTANCE_SPATIAL_TILE_SIZE = 48;
 const FRAGMENT_INSTANCE_MIN_TILE = -3;
@@ -121,6 +132,18 @@ interface FractureJob {
   blastStrength: number;
   blastRadius: number;
   energy: number;
+}
+
+interface VisualOnlyFragment {
+  visualProxy: DynamicVisualProxy;
+  position: THREE.Vector3;
+  rotation: THREE.Quaternion;
+  velocity: THREE.Vector3;
+  angularVelocity: THREE.Vector3;
+  halfHeight: number;
+  ageSeconds: number;
+  lifeSeconds: number;
+  moving: boolean;
 }
 
 export interface QueuedFractureStats {
@@ -712,11 +735,17 @@ class NullFragmentVisualProxy implements DynamicVisualProxy {
 
 export class DestructionSystem {
   private readonly scratchDirection = new THREE.Vector3();
+  private readonly scratchRandomDirection = new THREE.Vector3();
+  private readonly scratchAngularVelocity = new THREE.Vector3();
+  private readonly scratchUpwardBias = new THREE.Vector3();
+  private readonly scratchVisualRotationDelta = new THREE.Quaternion();
+  private readonly scratchVisualEuler = new THREE.Euler();
   private readonly upwardBias = new THREE.Vector3(0, 0.58, 0);
   private readonly fractureJobs: FractureJob[] = [];
   private fractureJobHead = 0;
   private readonly queuedFractureIds = new Set<number>();
   private readonly blastSnapshot: PhysicsObject[] = [];
+  private readonly visualOnlyFragments: VisualOnlyFragment[] = [];
   private readonly fragmentInstances: FragmentInstanceRenderer;
 
   constructor(
@@ -742,6 +771,119 @@ export class DestructionSystem {
 
   flushFragmentInstanceBounds(): void {
     this.fragmentInstances.flushBounds();
+  }
+
+  updateVisualFragments(deltaSeconds: number): void {
+    if (this.visualOnlyFragments.length === 0 || deltaSeconds <= 0) {
+      return;
+    }
+    const startedAt = perfMonitor.timeStart();
+    const delta = Math.min(deltaSeconds, 0.05);
+    let updated = 0;
+    let retired = 0;
+    for (let index = this.visualOnlyFragments.length - 1; index >= 0; index -= 1) {
+      const fragment = this.visualOnlyFragments[index];
+      fragment.ageSeconds += delta;
+      if (fragment.ageSeconds >= fragment.lifeSeconds) {
+        this.retireVisualOnlyFragmentAt(index);
+        retired += 1;
+        continue;
+      }
+      if (!fragment.moving) {
+        continue;
+      }
+
+      fragment.velocity.y -= VISUAL_FRAGMENT_GRAVITY * delta;
+      const damping = Math.max(0, 1 - VISUAL_FRAGMENT_LINEAR_DAMPING * delta);
+      fragment.velocity.multiplyScalar(damping);
+      fragment.position.addScaledVector(fragment.velocity, delta);
+      const floorY = fragment.halfHeight;
+      if (fragment.position.y < floorY) {
+        fragment.position.y = floorY;
+        if (fragment.velocity.y < 0) {
+          fragment.velocity.y *= -VISUAL_FRAGMENT_BOUNCE;
+          fragment.velocity.x *= 0.62;
+          fragment.velocity.z *= 0.62;
+        }
+      }
+
+      fragment.angularVelocity.multiplyScalar(Math.max(0, 1 - VISUAL_FRAGMENT_ANGULAR_DAMPING * delta));
+      this.scratchVisualEuler.set(
+        fragment.angularVelocity.x * delta,
+        fragment.angularVelocity.y * delta,
+        fragment.angularVelocity.z * delta
+      );
+      this.scratchVisualRotationDelta.setFromEuler(this.scratchVisualEuler);
+      fragment.rotation.multiply(this.scratchVisualRotationDelta).normalize();
+      fragment.visualProxy.sync(fragment.position, fragment.rotation);
+      updated += 1;
+      if (fragment.ageSeconds > 0.55 && fragment.velocity.lengthSq() < VISUAL_FRAGMENT_SETTLE_SPEED_SQ) {
+        fragment.moving = false;
+      }
+    }
+    perfMonitor.addCount("destruction.visualOnlyFragmentsActive", this.visualOnlyFragments.length);
+    perfMonitor.addCount("destruction.visualOnlyFragmentsUpdated", updated);
+    perfMonitor.addCount("destruction.visualOnlyFragmentsRetired", retired);
+    perfMonitor.addTiming("destruction.visualOnlyFragments", startedAt);
+  }
+
+  clearVisualFragments(): void {
+    while (this.visualOnlyFragments.length > 0) {
+      this.retireVisualOnlyFragmentAt(this.visualOnlyFragments.length - 1);
+    }
+  }
+
+  private spawnVisualOnlyFragment(
+    material: MaterialDefinition,
+    plan: FragmentPlan,
+    position: THREE.Vector3,
+    rotation: THREE.Quaternion,
+    origin: THREE.Vector3,
+    inheritedVelocity: THREE.Vector3,
+    blastStrength: number,
+    blastRadius: number,
+    sourceWasDebris: boolean
+  ): void {
+    const visualProxy = this.fragmentInstances.acquire(material.id, plan.size, position);
+    const offset = position.clone().sub(origin);
+    const distance = Math.max(offset.length(), 0.001);
+    const falloff = distance < blastRadius ? (1 - distance / blastRadius) ** 1.45 : 0.12;
+    const direction = this.computeBlastDirection(offset, material.id === "concrete" || material.id === "metal" ? 0.42 : 0.56, 0.28);
+    const speed =
+      ((blastStrength * (falloff + 0.12)) / Math.max(0.72, material.massFactor)) *
+      (sourceWasDebris ? 0.18 : 0.28) *
+      smallFragmentFlightBoost(plan.size);
+    const velocity = inheritedVelocity.clone().multiplyScalar(0.16).add(direction.multiplyScalar(speed));
+    const angularVelocity = randomUnitVectorInto(new THREE.Vector3(), this.rng).multiplyScalar(
+      material.angularResponse * (sourceWasDebris ? 1.8 : 2.8)
+    );
+    visualProxy.sync(position, rotation);
+    this.visualOnlyFragments.push({
+      visualProxy,
+      position: position.clone(),
+      rotation: rotation.clone(),
+      velocity,
+      angularVelocity,
+      halfHeight: Math.max(0.025, plan.size.y * 0.5),
+      ageSeconds: 0,
+      lifeSeconds: randomRange(this.rng, VISUAL_FRAGMENT_MIN_LIFE_SECONDS, VISUAL_FRAGMENT_MAX_LIFE_SECONDS),
+      moving: true
+    });
+    while (this.visualOnlyFragments.length > MAX_VISUAL_ONLY_FRAGMENTS) {
+      this.retireVisualOnlyFragmentAt(0);
+    }
+  }
+
+  private retireVisualOnlyFragmentAt(index: number): void {
+    const fragment = this.visualOnlyFragments[index];
+    if (!fragment) {
+      return;
+    }
+    fragment.visualProxy.dispose();
+    const last = this.visualOnlyFragments.pop();
+    if (last && index < this.visualOnlyFragments.length) {
+      this.visualOnlyFragments[index] = last;
+    }
   }
 
   createRuntimeFragmentPipelineWarmupObjects(): number[] {
@@ -845,7 +987,9 @@ export class DestructionSystem {
         const impulse = direction.multiplyScalar(impulseMagnitude);
         object.body.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
 
-        const torque = randomUnitVector(this.rng).multiplyScalar(blastStrength * falloff * 0.08 * material.angularResponse * wholeBodyScale);
+        const torque = randomUnitVectorInto(this.scratchRandomDirection, this.rng).multiplyScalar(
+          blastStrength * falloff * 0.08 * material.angularResponse * wholeBodyScale
+        );
         object.body.applyTorqueImpulse({ x: torque.x, y: torque.y, z: torque.z }, true);
       }
 
@@ -1182,7 +1326,9 @@ export class DestructionSystem {
 
     const immediateVisualPlanIndexes = immediateFragmentVisualPlanIndexes(plans, object.isDebris);
     const collisionEventPlanIndexes = fragmentCollisionEventPlanIndexes(plans, object.isDebris);
+    const physicalPlanIndexes = physicalFragmentPlanIndexes(plans, object.isDebris, collisionEventPlanIndexes);
     let collisionEventFragments = 0;
+    let visualOnlyFragments = 0;
 
     for (let planIndex = 0; planIndex < plans.length; planIndex += 1) {
       const plan = plans[planIndex];
@@ -1191,10 +1337,26 @@ export class DestructionSystem {
       const fragmentPosition = parentPosition.clone().add(worldOffset);
       const rotation = parentRotation.clone().multiply(plan.rotation);
       const breakableFragment = !object.isDebris && canFragmentShatterAgain(material.id, plan.size);
-      const chainFragment = shouldFragmentDriveChain(object, planVolume, planIndex, breakableFragment);
-      const fragmentCollisionEvents = chainFragment && collisionEventPlanIndexes.has(planIndex);
+      const physicalFragment = physicalPlanIndexes.has(planIndex);
+      const chainFragment = physicalFragment && shouldFragmentDriveChain(object, planVolume, planIndex, breakableFragment);
+      const fragmentCollisionEvents = physicalFragment && chainFragment && collisionEventPlanIndexes.has(planIndex);
       const fragmentCcd = fragmentCollisionEvents && !object.isDebris && (breakableFragment || planIndex < IMMEDIATE_PRIMARY_FRAGMENT_VISUALS);
       const stageVisualActivation = !immediateVisualPlanIndexes.has(planIndex);
+      if (!physicalFragment) {
+        this.spawnVisualOnlyFragment(
+          material,
+          plan,
+          fragmentPosition,
+          rotation,
+          origin,
+          inheritedVelocity,
+          blastStrength,
+          blastRadius,
+          object.isDebris
+        );
+        visualOnlyFragments += 1;
+        continue;
+      }
       const visualProxy = this.fragmentInstances.acquire(material.id, plan.size, fragmentPosition);
       const fragment = this.physics.addDynamicBox({
         label: `${material.name} debris`,
@@ -1213,10 +1375,11 @@ export class DestructionSystem {
         zoneId: object.zoneId,
         scoreValue: Math.max(1, Math.round(object.scoreValue / plans.length)),
         linearVelocity: inheritedVelocity.clone().multiplyScalar(0.22),
-        angularVelocity: randomUnitVector(this.rng).multiplyScalar(material.angularResponse * 2.35),
+        angularVelocity: randomUnitVectorInto(this.scratchAngularVelocity, this.rng).multiplyScalar(material.angularResponse * 2.35),
         ccd: fragmentCcd,
         stageVisualActivation,
-        collisionEvents: fragmentCollisionEvents
+        collisionEvents: fragmentCollisionEvents,
+        collisionLayer: chainFragment ? "chain-debris" : "passive-debris"
       });
       if (fragmentCollisionEvents) {
         collisionEventFragments += 1;
@@ -1226,6 +1389,8 @@ export class DestructionSystem {
       limitFragmentMotion(fragment, material.id, object.isDebris);
     }
     perfMonitor.addCount("destruction.fragmentsCreated", plans.length);
+    perfMonitor.addCount("destruction.visualOnlyFragmentsCreated", visualOnlyFragments);
+    perfMonitor.addCount("destruction.physicalFragmentsCreated", plans.length - visualOnlyFragments);
     perfMonitor.addCount("destruction.fragmentCollisionEventSources", collisionEventFragments);
     perfMonitor.addTiming("destruction.fracture", startedAt);
   }
@@ -1302,7 +1467,9 @@ export class DestructionSystem {
     const impulse = direction.multiplyScalar(impulseMagnitude);
     fragment.body.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
 
-    const torque = randomUnitVector(this.rng).multiplyScalar(blastStrength * 0.13 * material.angularResponse * smallFragmentBoost);
+    const torque = randomUnitVectorInto(this.scratchRandomDirection, this.rng).multiplyScalar(
+      blastStrength * 0.13 * material.angularResponse * smallFragmentBoost
+    );
     fragment.body.applyTorqueImpulse({ x: torque.x, y: torque.y, z: torque.z }, true);
   }
 
@@ -1399,11 +1566,11 @@ export class DestructionSystem {
   private computeBlastDirection(offset: THREE.Vector3, upwardBias = this.upwardBias.y, randomBias = 0.2): THREE.Vector3 {
     this.scratchDirection.copy(offset);
     if (this.scratchDirection.lengthSq() < 0.0001) {
-      this.scratchDirection.copy(randomUnitVector(this.rng));
+      this.scratchDirection.copy(randomUnitVectorInto(this.scratchRandomDirection, this.rng));
     }
     this.scratchDirection.normalize();
-    this.scratchDirection.add(new THREE.Vector3(0, upwardBias, 0));
-    this.scratchDirection.add(randomUnitVector(this.rng).multiplyScalar(randomBias));
+    this.scratchDirection.add(this.scratchUpwardBias.set(0, upwardBias, 0));
+    this.scratchDirection.add(randomUnitVectorInto(this.scratchRandomDirection, this.rng).multiplyScalar(randomBias));
     return this.scratchDirection.normalize().clone();
   }
 }
@@ -1451,6 +1618,34 @@ function fragmentCollisionEventPlanIndexes(plans: FragmentPlan[], sourceWasDebri
       .slice(0, budget)
       .map((entry) => entry.index)
   );
+}
+
+function physicalFragmentPlanIndexes(
+  plans: FragmentPlan[],
+  sourceWasDebris: boolean,
+  collisionEventIndexes: Set<number>
+): Set<number> {
+  const budget = sourceWasDebris ? SECONDARY_PHYSICAL_FRAGMENT_LIMIT : PRIMARY_PHYSICAL_FRAGMENT_LIMIT;
+  const selected = new Set(collisionEventIndexes);
+  if (selected.size >= budget) {
+    return selected;
+  }
+  const byVolume = plans
+    .map((plan, index) => ({ index, volume: fragmentVolume(plan.size) }))
+    .sort((a, b) => b.volume - a.volume);
+  for (const entry of byVolume) {
+    if (selected.size >= budget) {
+      break;
+    }
+    if (selected.has(entry.index)) {
+      continue;
+    }
+    if (entry.volume < MIN_PHYSICAL_FRAGMENT_VOLUME && selected.size > 0) {
+      continue;
+    }
+    selected.add(entry.index);
+  }
+  return selected;
 }
 
 function fragmentVolume(size: THREE.Vector3): number {
