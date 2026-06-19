@@ -94,8 +94,13 @@ const RENDER_WARMUP_STABLE_FRAMES = 24;
 const RENDER_WARMUP_MAX_FRAMES = 180;
 const RENDER_WARMUP_SYNTHETIC_OBJECTS_PER_MATERIAL = 8;
 const RENDER_WARMUP_SYNTHETIC_DESTRUCTION_PASSES = 3;
+const RENDER_WARMUP_POST_CLEANUP_EFFECT_PASSES = 2;
+const RENDER_WARMUP_POST_CLEANUP_EFFECT_FRAMES = 8;
 const RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES = 72;
 const RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES = 260;
+const REUSED_WARMUP_MIN_FRAMES = 2;
+const REUSED_WARMUP_STABLE_FRAMES = 3;
+const REUSED_WARMUP_MAX_FRAMES = 8;
 const RENDER_WARMUP_SYNTHETIC_ORIGIN = new THREE.Vector3(72, 1.2, 72);
 const RENDER_WARMUP_SYNTHETIC_DESTRUCTION_ZONE = "render-warmup-destruction";
 const AIM_TRAFFIC_STEP_SECONDS = 1 / 24;
@@ -2106,12 +2111,27 @@ class Game {
       this.renderer.render(this.scene, this.cameraRig.camera);
       const programDelta = rendererProgramCount(this.renderer) - programsBeforeRender;
       if (programDelta > 0 && this.renderWarmupState.phase === "ready") {
-        perfMonitor.addCount("renderer.programsCreatedAfterWarmup", programDelta);
+        this.recordPostWarmupProgramCreation(programDelta);
       }
       perfMonitor.addTiming("renderer.render", startedAt);
     } finally {
       perfMonitor.endFrame();
     }
+  }
+
+  private recordPostWarmupProgramCreation(programDelta: number): void {
+    if (!perfMonitor.isEnabled()) {
+      return;
+    }
+    perfMonitor.addCount("renderer.programsCreatedAfterWarmup", programDelta);
+    perfMonitor.addCount("renderer.postWarmupProgramFrameDrawCalls", rendererDrawCalls(this.renderer));
+    perfMonitor.addCount("renderer.postWarmupProgramFrameTriangles", this.renderer.info.render.triangles);
+    perfMonitor.addCount("renderer.postWarmupProgramFramePrograms", rendererProgramCount(this.renderer));
+    const physicsStats = this.physics.getRuntimeStats();
+    perfMonitor.addCount("renderer.postWarmupProgramFrameDynamicBodies", physicsStats.dynamicBodyCount);
+    perfMonitor.addCount("renderer.postWarmupProgramFrameAwakeBodies", physicsStats.awakeBodyCount);
+    perfMonitor.addCount("renderer.postWarmupProgramFrameActiveDebris", physicsStats.activeDebrisCount);
+    perfMonitor.addCount("renderer.postWarmupProgramFramePendingSupport", physicsStats.pendingSupportReleaseCount);
   }
 
   private captureRenderStats(): DowntownMayhemRenderStats {
@@ -2553,6 +2573,24 @@ class Game {
       }
       cleanupTransientWarmup(false, true, false);
       restoreFrustumCulling();
+      this.status = "Preparing renderer pipelines before impact (runtime cascade pools).";
+      for (let pass = 0; pass < RENDER_WARMUP_POST_CLEANUP_EFFECT_PASSES; pass += 1) {
+        this.destruction.showFragmentVisualWarmupPreview();
+        this.playRenderWarmupEffects(RENDER_WARMUP_BRUTAL_PASSES + pass);
+        for (let frame = 0; frame < RENDER_WARMUP_POST_CLEANUP_EFFECT_FRAMES; frame += 1) {
+          if (!(await renderWarmupFrame())) {
+            return;
+          }
+        }
+        this.destruction.parkFragmentVisualWarmupPreview();
+        this.particles.clearTransientEffects();
+        this.particles.keepPoolPipelinesResident();
+        this.destruction.flushFragmentInstanceBounds();
+        this.physics.flushInstancedRenderBounds();
+        for (const camera of warmupCameras) {
+          await this.renderer.compileAsync(this.scene, camera);
+        }
+      }
       this.status = "Preparing renderer pipelines before impact (settling runtime scene).";
       lastProgramCount = rendererProgramCount(this.renderer);
       stableFrames = 0;
@@ -2612,6 +2650,42 @@ class Game {
       this.status = "Renderer warmup failed; impact may stutter.";
     } finally {
       restoreFrustumCulling();
+    }
+  }
+
+  private async warmReusedLevelRuntimeScene(): Promise<void> {
+    const token = this.renderWarmupToken;
+    let frames = 0;
+    let stableFrames = 0;
+    let lastProgramCount = rendererProgramCount(this.renderer);
+    try {
+      await this.renderer.compileAsync(this.scene, this.cameraRig.camera);
+      while (
+        frames < REUSED_WARMUP_MAX_FRAMES &&
+        (frames < REUSED_WARMUP_MIN_FRAMES || stableFrames < REUSED_WARMUP_STABLE_FRAMES)
+      ) {
+        await renderWarmupYield();
+        this.renderer.render(this.scene, this.cameraRig.camera);
+        if (this.disposed || token !== this.renderWarmupToken) {
+          return;
+        }
+        frames += 1;
+        const programs = rendererProgramCount(this.renderer);
+        if (programs === lastProgramCount) {
+          stableFrames += 1;
+        } else {
+          lastProgramCount = programs;
+          stableFrames = 0;
+        }
+      }
+    } finally {
+      this.renderWarmupState = {
+        ...this.renderWarmupState,
+        programs: rendererProgramCount(this.renderer),
+        geometries: this.renderer.info.memory.geometries,
+        frames: this.renderWarmupState.frames + frames,
+        bodyCountAfterCleanup: this.physics.getDynamicBodyCount()
+      };
     }
   }
 
@@ -3794,6 +3868,8 @@ class Game {
       if (reuseWarmup) {
         this.physics.flushStagedVisualActivations(Number.POSITIVE_INFINITY, 0);
         this.status = `${level.name}: ${level.objective}`;
+        this.options.updateLoadingStatus?.("Preparing reset renderer pipelines");
+        await this.warmReusedLevelRuntimeScene();
         this.options.updateLoadingStatus?.("Ready");
       } else {
         this.scheduleRenderWarmup();
