@@ -46,11 +46,13 @@ const CHAIN_IMPACT_COOLDOWN_MS = 220;
 const CHAIN_IMPACT_MAX_PER_FRAME = 14;
 const CHAIN_IMPACT_VFX_MAX_PER_FRAME = 4;
 const CHAIN_COLLISION_DRAIN_MAX_PER_FRAME = 192;
+const MAX_FRAME_DELTA_SECONDS = 0.05;
+const MAX_SIMULATION_DELTA_SECONDS = 1 / 30;
 const SURFACE_IMPACT_MAX_PER_FRAME = 6;
 const SURFACE_IMPACT_VFX_MAX_PER_FRAME = 2;
 const SURFACE_COLLISION_MAX_PER_FRAME = 160;
-const FRACTURE_PROCESS_MAX_PER_FRAME = 3;
-const FRACTURE_PROCESS_TIME_BUDGET_MS = 4.8;
+const FRACTURE_PROCESS_MAX_PER_FRAME = 1;
+const FRACTURE_PROCESS_TIME_BUDGET_MS = 2;
 const CHAIN_IMPACT_SWEEP_MS = 160;
 const SCORE_SETTLED_SPEED = 1.55;
 const AIM_FALLBACK_SURFACE_Y = 0.055;
@@ -59,6 +61,7 @@ const FIRE_MIN_DELAY_MS = 760;
 const FIRE_MAX_DELAY_MS = 1850;
 const MAX_BURNING_HAZARDS = 18;
 const HAZARD_EXPLOSIONS_MAX_PER_FRAME = 1;
+const SCATTER_PHYSICAL_SHARD_COUNT = 6;
 const VOLATILE_TRIGGER_LIMIT_BY_DEPTH = [3, 1, 0] as const;
 const CAMERA_FOCUS_MIN_SCORE = 155;
 const CAMERA_FOCUS_LOCK_MS = 1100;
@@ -2008,7 +2011,8 @@ class Game {
   private update(): void {
     this.timer.update();
     const frameDelta = this.timer.getDelta();
-    const delta = Math.min(frameDelta, 0.05);
+    const delta = Math.min(frameDelta, MAX_FRAME_DELTA_SECONDS);
+    const simulationDelta = Math.min(frameDelta, MAX_SIMULATION_DELTA_SECONDS);
     if (perfMonitor.isEnabled()) {
       perfMonitor.beginFrame(frameDelta * 1000, this.physics.getRuntimeStats());
     }
@@ -2044,10 +2048,10 @@ class Game {
       if (this.runState.phase !== "aim") {
         this.aimTrafficAccumulator = 0;
         startedAt = perfMonitor.timeStart();
-        this.physics.step(delta * timeScale);
+        this.physics.step(simulationDelta * timeScale);
         perfMonitor.addTiming("physics.step", startedAt);
         startedAt = perfMonitor.timeStart();
-        this.projectiles.update(delta * timeScale);
+        this.projectiles.update(simulationDelta * timeScale);
         perfMonitor.addTiming("game.projectiles", startedAt);
       }
       startedAt = perfMonitor.timeStart();
@@ -3767,7 +3771,7 @@ class Game {
   private spawnScatterFragments(origin: THREE.Vector3, direction: THREE.Vector3, sizeScale: number): void {
     const material = this.materials.get("metal");
     const renderMaterial = this.materials.getRenderMaterial("metal");
-    for (let i = 0; i < 14; i += 1) {
+    for (let i = 0; i < SCATTER_PHYSICAL_SHARD_COUNT; i += 1) {
       const scatterDirection = direction
         .clone()
         .add(new THREE.Vector3(randomRange(this.rng, -0.4, 0.4), randomRange(this.rng, 0, 0.55), randomRange(this.rng, -0.4, 0.4)))

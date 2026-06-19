@@ -11,6 +11,7 @@ const PRIMARY_PHYSICAL_FRAGMENT_LIMIT = 8;
 const SECONDARY_PHYSICAL_FRAGMENT_LIMIT = 3;
 const MIN_PHYSICAL_FRAGMENT_VOLUME = 0.012;
 const MAX_VISUAL_ONLY_FRAGMENTS = 320;
+const MAX_VISUAL_ONLY_FRAGMENT_UPDATES_PER_FRAME = 140;
 const VISUAL_FRAGMENT_MIN_LIFE_SECONDS = 2.2;
 const VISUAL_FRAGMENT_MAX_LIFE_SECONDS = 4;
 const VISUAL_FRAGMENT_SETTLE_MIN_AGE_SECONDS = 0.35;
@@ -758,6 +759,7 @@ export class DestructionSystem {
   private readonly queuedFractureIds = new Set<number>();
   private readonly blastSnapshot: PhysicsObject[] = [];
   private readonly visualOnlyFragments: VisualOnlyFragment[] = [];
+  private visualOnlyFragmentUpdateCursor = 0;
   private readonly fragmentInstances: FragmentInstanceRenderer;
 
   constructor(
@@ -799,39 +801,24 @@ export class DestructionSystem {
       if (fragment.ageSeconds >= fragment.lifeSeconds) {
         this.retireVisualOnlyFragmentAt(index);
         retired += 1;
-        continue;
       }
-      if (!fragment.moving) {
-        continue;
-      }
-
-      fragment.velocity.y -= VISUAL_FRAGMENT_GRAVITY * delta;
-      const damping = Math.max(0, 1 - VISUAL_FRAGMENT_LINEAR_DAMPING * delta);
-      fragment.velocity.multiplyScalar(damping);
-      fragment.position.addScaledVector(fragment.velocity, delta);
-      const floorY = fragment.halfHeight;
-      if (fragment.position.y < floorY) {
-        fragment.position.y = floorY;
-        if (fragment.velocity.y < 0) {
-          fragment.velocity.y *= -VISUAL_FRAGMENT_BOUNCE;
-          fragment.velocity.x *= 0.62;
-          fragment.velocity.z *= 0.62;
+    }
+    const fragmentCount = this.visualOnlyFragments.length;
+    if (fragmentCount > 0) {
+      let inspected = 0;
+      let index = this.visualOnlyFragmentUpdateCursor % fragmentCount;
+      while (inspected < fragmentCount && updated < MAX_VISUAL_ONLY_FRAGMENT_UPDATES_PER_FRAME) {
+        const fragment = this.visualOnlyFragments[index];
+        if (fragment.moving) {
+          this.updateMovingVisualFragment(fragment, delta);
+          updated += 1;
         }
+        index = (index + 1) % fragmentCount;
+        inspected += 1;
       }
-
-      fragment.angularVelocity.multiplyScalar(Math.max(0, 1 - VISUAL_FRAGMENT_ANGULAR_DAMPING * delta));
-      this.scratchVisualEuler.set(
-        fragment.angularVelocity.x * delta,
-        fragment.angularVelocity.y * delta,
-        fragment.angularVelocity.z * delta
-      );
-      this.scratchVisualRotationDelta.setFromEuler(this.scratchVisualEuler);
-      fragment.rotation.multiply(this.scratchVisualRotationDelta).normalize();
-      fragment.visualProxy.sync(fragment.position, fragment.rotation);
-      updated += 1;
-      if (fragment.ageSeconds > VISUAL_FRAGMENT_SETTLE_MIN_AGE_SECONDS && fragment.velocity.lengthSq() < VISUAL_FRAGMENT_SETTLE_SPEED_SQ) {
-        fragment.moving = false;
-      }
+      this.visualOnlyFragmentUpdateCursor = index;
+    } else {
+      this.visualOnlyFragmentUpdateCursor = 0;
     }
     perfMonitor.addCount("destruction.visualOnlyFragmentsActive", this.visualOnlyFragments.length);
     perfMonitor.addCount("destruction.visualOnlyFragmentsUpdated", updated);
@@ -839,10 +826,40 @@ export class DestructionSystem {
     perfMonitor.addTiming("destruction.visualOnlyFragments", startedAt);
   }
 
+  private updateMovingVisualFragment(fragment: VisualOnlyFragment, delta: number): void {
+    fragment.velocity.y -= VISUAL_FRAGMENT_GRAVITY * delta;
+    const damping = Math.max(0, 1 - VISUAL_FRAGMENT_LINEAR_DAMPING * delta);
+    fragment.velocity.multiplyScalar(damping);
+    fragment.position.addScaledVector(fragment.velocity, delta);
+    const floorY = fragment.halfHeight;
+    if (fragment.position.y < floorY) {
+      fragment.position.y = floorY;
+      if (fragment.velocity.y < 0) {
+        fragment.velocity.y *= -VISUAL_FRAGMENT_BOUNCE;
+        fragment.velocity.x *= 0.62;
+        fragment.velocity.z *= 0.62;
+      }
+    }
+
+    fragment.angularVelocity.multiplyScalar(Math.max(0, 1 - VISUAL_FRAGMENT_ANGULAR_DAMPING * delta));
+    this.scratchVisualEuler.set(
+      fragment.angularVelocity.x * delta,
+      fragment.angularVelocity.y * delta,
+      fragment.angularVelocity.z * delta
+    );
+    this.scratchVisualRotationDelta.setFromEuler(this.scratchVisualEuler);
+    fragment.rotation.multiply(this.scratchVisualRotationDelta).normalize();
+    fragment.visualProxy.sync(fragment.position, fragment.rotation);
+    if (fragment.ageSeconds > VISUAL_FRAGMENT_SETTLE_MIN_AGE_SECONDS && fragment.velocity.lengthSq() < VISUAL_FRAGMENT_SETTLE_SPEED_SQ) {
+      fragment.moving = false;
+    }
+  }
+
   clearVisualFragments(): void {
     while (this.visualOnlyFragments.length > 0) {
       this.retireVisualOnlyFragmentAt(this.visualOnlyFragments.length - 1);
     }
+    this.visualOnlyFragmentUpdateCursor = 0;
   }
 
   private spawnVisualOnlyFragment(
@@ -895,6 +912,9 @@ export class DestructionSystem {
     const last = this.visualOnlyFragments.pop();
     if (last && index < this.visualOnlyFragments.length) {
       this.visualOnlyFragments[index] = last;
+    }
+    if (this.visualOnlyFragmentUpdateCursor > this.visualOnlyFragments.length) {
+      this.visualOnlyFragmentUpdateCursor = this.visualOnlyFragments.length;
     }
   }
 

@@ -3,12 +3,12 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import type { MaterialDefinition, MaterialId } from "./materialCatalog";
 import { perfMonitor } from "./perf";
 
-const MAX_ACTIVE_DEBRIS = 180;
-const SETTLED_ACTIVE_DEBRIS_TARGET = 90;
+const MAX_ACTIVE_DEBRIS = 120;
+const SETTLED_ACTIVE_DEBRIS_TARGET = 60;
 const MAX_FROZEN_RUBBLE = 650;
 const RUBBLE_FREEZE_INTERVAL_SECONDS = 0.18;
-const SETTLED_RUBBLE_MIN_AGE_MS = 760;
-const FORCED_RUBBLE_MIN_AGE_MS = 420;
+const SETTLED_RUBBLE_MIN_AGE_MS = 520;
+const FORCED_RUBBLE_MIN_AGE_MS = 260;
 const MAX_RUBBLE_FREEZE_CENTER_Y = 0.78;
 const MAX_PHYSICS_SUBSTEPS_PER_FRAME = 2;
 const FROZEN_RUBBLE_BUCKET_CAPACITY = 512;
