@@ -13,6 +13,7 @@ interface InputCallbacks {
 
 export class InputController {
   private readonly pointer = new THREE.Vector2(0, 0);
+  private pendingAimFrame: number | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -25,6 +26,10 @@ export class InputController {
   }
 
   dispose(): void {
+    if (this.pendingAimFrame !== null) {
+      window.cancelAnimationFrame(this.pendingAimFrame);
+      this.pendingAimFrame = null;
+    }
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("keydown", this.onKeyDown);
@@ -32,10 +37,21 @@ export class InputController {
   }
 
   private readonly onPointerMove = (event: PointerEvent): void => {
-    this.callbacks.aim(this.pointerFromEvent(event));
+    this.pointerFromEvent(event);
+    if (this.pendingAimFrame !== null) {
+      return;
+    }
+    this.pendingAimFrame = window.requestAnimationFrame(() => {
+      this.pendingAimFrame = null;
+      this.callbacks.aim(this.pointer);
+    });
   };
 
   private readonly onPointerDown = (event: PointerEvent): void => {
+    if (this.pendingAimFrame !== null) {
+      window.cancelAnimationFrame(this.pendingAimFrame);
+      this.pendingAimFrame = null;
+    }
     this.callbacks.aim(this.pointerFromEvent(event));
     if (event.button === 0 && event.pointerType === "mouse") {
       this.callbacks.fire();
@@ -93,6 +109,6 @@ export class InputController {
     const rect = this.canvas.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
-    return this.pointer.clone();
+    return this.pointer;
   }
 }

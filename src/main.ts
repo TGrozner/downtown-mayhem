@@ -25,6 +25,7 @@ import { ScorePopupLayer } from "./scorePopups";
 import { ShotScoreTracker, type ScoreBreakdown, type ScoreEvent } from "./scoring";
 import {
   DEFAULT_GAME_SETTINGS,
+  effectiveGraphicsPixelRatio,
   GRAPHICS_QUALITY_LABELS,
   RENDERER_BACKEND_LABELS,
   type GameSettings,
@@ -46,8 +47,8 @@ const CHAIN_IMPACT_MAX_PER_FRAME = 14;
 const CHAIN_COLLISION_DRAIN_MAX_PER_FRAME = 192;
 const SURFACE_IMPACT_MAX_PER_FRAME = 6;
 const SURFACE_COLLISION_MAX_PER_FRAME = 160;
-const FRACTURE_PROCESS_MAX_PER_FRAME = 2;
-const FRACTURE_PROCESS_TIME_BUDGET_MS = 3.2;
+const FRACTURE_PROCESS_MAX_PER_FRAME = 3;
+const FRACTURE_PROCESS_TIME_BUDGET_MS = 4.8;
 const CHAIN_IMPACT_SWEEP_MS = 160;
 const SCORE_SETTLED_SPEED = 1.55;
 const AIM_FALLBACK_SURFACE_Y = 0.055;
@@ -94,6 +95,9 @@ const RENDER_WARMUP_SYNTHETIC_DESTRUCTION_PASSES = 3;
 const RENDER_WARMUP_POST_CLEANUP_STABLE_FRAMES = 72;
 const RENDER_WARMUP_POST_CLEANUP_MAX_FRAMES = 260;
 const RENDER_WARMUP_SYNTHETIC_ORIGIN = new THREE.Vector3(72, 1.2, 72);
+const RENDER_WARMUP_SYNTHETIC_DESTRUCTION_ZONE = "render-warmup-destruction";
+const AIM_TRAFFIC_STEP_SECONDS = 1 / 24;
+const AIM_TRAFFIC_MAX_ACCUMULATED_SECONDS = 0.12;
 const NIGHT_SKY_RADIUS = 118;
 const MOON_DIRECTION = new THREE.Vector3(-0.2, 0.24, -0.95).normalize();
 const ARCADE_LEVELS = TEST_CHAMBERS.map(chamberToArcadeLevel);
@@ -155,6 +159,7 @@ interface RenderWarmupState {
   programs: number;
   geometries: number;
   frames: number;
+  bodyCountAfterCleanup?: number;
   error?: string;
 }
 
@@ -239,7 +244,7 @@ function configureDowntownMayhemRenderer(renderer: DowntownMayhemRenderer, setti
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.08;
-  renderer.setPixelRatio(graphicsPixelRatioCap(settings.graphicsQuality));
+  renderer.setPixelRatio(effectiveGraphicsPixelRatio(graphicsPixelRatioCap(settings.graphicsQuality)));
 }
 
 function activeWebGpuRendererBackend(renderer: WebGPURenderer): "webgpu" | "webgl2" {
@@ -1490,6 +1495,7 @@ interface PerfDiskLogSummary {
 
 class PerfDiskLogger {
   private readonly sessionId = createPerfDiskSessionId();
+  private readonly includeFullReport = shouldIncludeFullPerfDiskReport();
   private readonly handlePageHide = () => this.flush("pagehide");
   private intervalId: number | null = null;
   private sequence = 0;
@@ -1541,18 +1547,36 @@ class PerfDiskLogger {
 
   private createPayload(reason: string) {
     const report = perfMonitor.report();
-    return {
+    const payload: {
+      sessionId: string;
+      sequence: number;
+      reason: string;
+      createdAt: string;
+      pageTimeMs: number;
+      href: string;
+      stats: DowntownMayhemRenderStats;
+      warmup: RenderWarmupState;
+      summary: PerfDiskLogSummary;
+      report?: PerfReport;
+    } = {
       sessionId: this.sessionId,
       sequence: this.sequence++,
       reason,
       createdAt: new Date().toISOString(),
       pageTimeMs: Math.round(performance.now() * 10) / 10,
       href: location.href,
-      stats: this.game.getRenderStats(),
+      stats: this.game.getPerfLogRenderStats(this.shouldCaptureFullStats(reason)),
       warmup: this.game.getRenderWarmupState(),
-      summary: summarizePerfReport(report),
-      report
+      summary: summarizePerfReport(report)
     };
+    if (this.includeFullReport || reason === "manual") {
+      payload.report = report;
+    }
+    return payload;
+  }
+
+  private shouldCaptureFullStats(reason: string): boolean {
+    return this.includeFullReport || reason === "manual" || reason === "score-finalized";
   }
 }
 
@@ -1657,6 +1681,14 @@ function shouldEnablePerfDiskLogging(): boolean {
   return import.meta.env.DEV && perfMonitor.isEnabled();
 }
 
+function shouldIncludeFullPerfDiskReport(): boolean {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? "").has("perfFull");
+  } catch {
+    return false;
+  }
+}
+
 class Game {
   private readonly renderer: DowntownMayhemRenderer;
   private readonly rendererPreference: RendererBackendPreference;
@@ -1684,7 +1716,19 @@ class Game {
   private readonly aimMarkerPoint = DEFAULT_AIM_POINT.clone();
   private readonly aimSurfaceNormal = AIM_SURFACE_NORMAL.clone();
   private readonly aimSurfaceTargets: THREE.Object3D[] = [];
+  private readonly aimVisibleSurfaceTargets: THREE.Object3D[] = [];
   private readonly aimSurfaceHits: THREE.Intersection<THREE.Object3D>[] = [];
+  private readonly projectileSegmentCandidates: PhysicsObject[] = [];
+  private readonly projectileCurrentPosition = new THREE.Vector3();
+  private readonly projectilePreviousPosition = new THREE.Vector3();
+  private readonly chainSourcePosition = new THREE.Vector3();
+  private readonly chainTargetPosition = new THREE.Vector3();
+  private readonly chainTowardTarget = new THREE.Vector3();
+  private readonly chainImpactOrigin = new THREE.Vector3();
+  private readonly chainRelativeVelocity = new THREE.Vector3();
+  private readonly chainImpactLever = new THREE.Vector3();
+  private readonly surfaceObjectPosition = new THREE.Vector3();
+  private readonly surfaceImpactOrigin = new THREE.Vector3();
   private readonly aimMarkerMaterial = new THREE.MeshBasicMaterial({
     color: 0x8ff7ff,
     transparent: true,
@@ -1705,6 +1749,7 @@ class Game {
   private readonly handleBeforeUnload = () => this.input.dispose();
   private readonly chainImpactCooldowns = new Map<string, number>();
   private readonly surfaceImpactCooldowns = new Map<number, number>();
+  private readonly processedSurfaceImpactObjectIds = new Set<number>();
   private readonly triggeredHazards = new Set<number>();
   private readonly burningHazards = new Map<number, BurningHazard>();
 
@@ -1722,6 +1767,7 @@ class Game {
   private fpsSampleElapsed = 0;
   private fpsSampleFrames = 0;
   private displayedFps = 0;
+  private aimTrafficAccumulator = 0;
   private nextChainCooldownSweep = 0;
   private spectacleFocusScore = 0;
   private spectacleFocusUpdatedAt = 0;
@@ -1730,6 +1776,7 @@ class Game {
   private disposed = false;
   private frozenForCapture = false;
   private levelReloadInProgress = false;
+  private aimSurfaceTargetsDirty = true;
   private readonly perfDiskLogger: PerfDiskLogger | null = shouldEnablePerfDiskLogging() ? new PerfDiskLogger(this) : null;
   private renderWarmupToken = 0;
   private renderWarmupPromise: Promise<void> | null = null;
@@ -1773,7 +1820,7 @@ class Game {
     this.rng = new SeededRandom(this.runSeed);
     this.cameraRig = new CameraRig(this.renderer);
     this.physics = new PhysicsWorld(this.scene);
-    this.destruction = new DestructionSystem(this.physics, this.materials, this.rng);
+    this.destruction = new DestructionSystem(this.physics, this.scene, this.materials, this.rng);
     this.particles = new ParticleSystem(this.scene);
     this.explosion = new ExplosionSystem(this.particles);
     this.projectiles = new ProjectileSystem(this.physics, this.materials, this.rng);
@@ -1826,6 +1873,10 @@ class Game {
 
   getRenderStats(): DowntownMayhemRenderStats {
     return this.captureRenderStats();
+  }
+
+  getPerfLogRenderStats(captureFullStats: boolean): DowntownMayhemRenderStats {
+    return captureFullStats ? this.captureRenderStats() : this.captureFastRenderStats();
   }
 
   getRenderWarmupState(): RenderWarmupState {
@@ -1928,10 +1979,16 @@ class Game {
 
       if (this.runState.phase === "aim") {
         startedAt = perfMonitor.timeStart();
-        this.physics.advanceTrafficRoutes(delta);
+        this.aimTrafficAccumulator += delta;
+        if (this.aimTrafficAccumulator >= AIM_TRAFFIC_STEP_SECONDS) {
+          const trafficDelta = Math.min(this.aimTrafficAccumulator, AIM_TRAFFIC_MAX_ACCUMULATED_SECONDS);
+          this.aimTrafficAccumulator = 0;
+          this.physics.advanceTrafficRoutes(trafficDelta);
+        }
         perfMonitor.addTiming("physics.traffic", startedAt);
       }
       if (this.runState.phase !== "aim") {
+        this.aimTrafficAccumulator = 0;
         startedAt = perfMonitor.timeStart();
         this.physics.step(delta * timeScale);
         perfMonitor.addTiming("physics.step", startedAt);
@@ -1956,6 +2013,8 @@ class Game {
       perfMonitor.addTiming("game.updatePhase", startedAt);
       this.destruction.processQueuedFractures(FRACTURE_PROCESS_MAX_PER_FRAME, FRACTURE_PROCESS_TIME_BUDGET_MS);
       this.physics.flushStagedVisualActivations(8, 0.25);
+      this.destruction.flushFragmentInstanceBounds();
+      this.physics.flushInstancedRenderBounds();
 
       startedAt = perfMonitor.timeStart();
       this.particles.update(delta * visualScale);
@@ -2028,6 +2087,26 @@ class Game {
       programs: rendererProgramCount(this.renderer),
       visibleMeshes,
       visibleMaterials: visibleMaterials.size
+    };
+    this.renderStatsFrame += 1;
+    return { ...this.lastRenderStats };
+  }
+
+  private captureFastRenderStats(): DowntownMayhemRenderStats {
+    this.lastRenderStats = {
+      ...this.lastRenderStats,
+      frame: this.renderStatsFrame,
+      levelName: this.currentLevel().name,
+      rendererPreference: this.rendererPreference,
+      rendererBackend: this.rendererBackend,
+      bodyCount: this.physics.getDynamicBodyCount(),
+      drawCalls: rendererDrawCalls(this.renderer),
+      triangles: this.renderer.info.render.triangles,
+      lines: this.renderer.info.render.lines,
+      points: this.renderer.info.render.points,
+      geometries: this.renderer.info.memory.geometries,
+      textures: this.renderer.info.memory.textures,
+      programs: rendererProgramCount(this.renderer)
     };
     this.renderStatsFrame += 1;
     return { ...this.lastRenderStats };
@@ -2187,6 +2266,7 @@ class Game {
   private loadLevel(): void {
     this.physics.clearDynamic();
     this.clearLevelDecorations();
+    this.invalidateAimSurfaceTargets();
     this.projectiles.clearActive();
     this.destruction.clearQueuedFractures();
     this.chainImpactCooldowns.clear();
@@ -2219,6 +2299,7 @@ class Game {
       addDecoration: (object) => this.addDecoration(object)
     });
     this.physics.batchStaticDetails();
+    this.invalidateAimSurfaceTargets();
     setOptionalShadowMapFlag(this.renderer, "needsUpdate", true);
     this.status = `${level.name}: ${level.objective}`;
     this.cannon.aimAtWorldPoint(this.aimPoint, PROJECTILES[this.selectedProjectile].speed * this.powerScale);
@@ -2269,7 +2350,8 @@ class Game {
         durationMs: finishedAt - this.renderWarmupState.startedAt,
         programs: rendererProgramCount(this.renderer),
         geometries: this.renderer.info.memory.geometries,
-        frames: 1
+        frames: 1,
+        bodyCountAfterCleanup: this.physics.getDynamicBodyCount()
       };
       this.markCurrentLevelWarmupReady();
       if (this.runState.phase === "aim" && this.runState.shotAvailable) {
@@ -2291,6 +2373,7 @@ class Game {
         programs: rendererProgramCount(this.renderer),
         geometries: this.renderer.info.memory.geometries,
         frames: this.renderWarmupState.frames,
+        bodyCountAfterCleanup: this.physics.getDynamicBodyCount(),
         error: message
       };
       this.status = "Renderer warmup failed; impact may stutter.";
@@ -2434,7 +2517,8 @@ class Game {
         durationMs: finishedAt - this.renderWarmupState.startedAt,
         programs: rendererProgramCount(this.renderer),
         geometries: this.renderer.info.memory.geometries,
-        frames
+        frames,
+        bodyCountAfterCleanup: this.physics.getDynamicBodyCount()
       };
       this.markCurrentLevelWarmupReady();
       if (this.runState.phase === "aim" && this.runState.shotAvailable) {
@@ -2458,6 +2542,7 @@ class Game {
         programs: rendererProgramCount(this.renderer),
         geometries: this.renderer.info.memory.geometries,
         frames: this.renderWarmupState.frames,
+        bodyCountAfterCleanup: this.physics.getDynamicBodyCount(),
         error: message
       };
       this.status = "Renderer warmup failed; impact may stutter.";
@@ -2492,7 +2577,6 @@ class Game {
     this.physics.createFrozenRubbleWarmupObjects(fragmentMeshes);
 
     for (const object of this.destruction.createFragmentVisualPoolWarmupObjects()) {
-      disableFrustumCulling(object);
       this.scene.add(object);
     }
 
@@ -2553,7 +2637,9 @@ class Game {
           zoneId: "render-warmup-synthetic",
           scoreValue: 0,
           sleeping: true,
-          stageVisualActivation: true
+          stageVisualActivation: true,
+          ccd: false,
+          collisionEvents: false
         });
         object.mesh.castShadow = false;
         object.mesh.receiveShadow = true;
@@ -2593,7 +2679,7 @@ class Game {
     const group = this.ensureRenderPipelineSentinelGroup();
     let index = 0;
     while (this.renderWarmupPersistentObjects.length > 0) {
-      const object = this.renderWarmupPersistentObjects.shift();
+      const object = this.renderWarmupPersistentObjects.pop();
       if (!object) {
         continue;
       }
@@ -2709,7 +2795,7 @@ class Game {
           chainSource: true,
           category: "structure",
           scoreRole: index % 3 === 0 ? "target" : "neutral",
-          zoneId: "render-warmup",
+          zoneId: RENDER_WARMUP_SYNTHETIC_DESTRUCTION_ZONE,
           scoreValue: 0,
           bodyType: "fixed"
         });
@@ -2723,7 +2809,7 @@ class Game {
 
   private clearSyntheticDestructionWarmupObjects(): void {
     const warmupObjectIds = Array.from(this.physics.objects.values())
-      .filter((object) => object.zoneId === "render-warmup-synthetic")
+      .filter((object) => object.zoneId === RENDER_WARMUP_SYNTHETIC_DESTRUCTION_ZONE)
       .map((object) => object.id);
     for (const objectId of warmupObjectIds) {
       this.physics.removeObject(objectId);
@@ -2738,7 +2824,7 @@ class Game {
       return;
     }
     group.parent?.remove(group);
-    group.clear();
+    this.disposeRenderWarmupOwnedResources(group);
     this.renderPipelineSentinelGroup = null;
   }
 
@@ -2789,9 +2875,14 @@ class Game {
       return;
     }
     group.parent?.remove(group);
+    this.disposeRenderWarmupOwnedResources(group);
+    this.renderWarmupGroup = null;
+  }
+
+  private disposeRenderWarmupOwnedResources(root: THREE.Object3D): void {
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
-    group.traverse((object) => {
+    root.traverse((object) => {
       const renderable = object as THREE.Object3D & {
         geometry?: THREE.BufferGeometry;
         material?: THREE.Material | THREE.Material[];
@@ -2814,8 +2905,7 @@ class Game {
     for (const material of materials) {
       material.dispose();
     }
-    group.clear();
-    this.renderWarmupGroup = null;
+    root.clear();
   }
 
   private aim(pointer: THREE.Vector2): void {
@@ -2839,24 +2929,19 @@ class Game {
   }
 
   private pickAimSurface(): boolean {
-    this.aimSurfaceTargets.length = 0;
-    for (const object of this.physics.getDynamicObjects()) {
-      if (object.category === "projectile" || object.isDebris || object.zoneId === "surface" || !object.mesh.visible) {
-        continue;
-      }
-      this.aimSurfaceTargets.push(object.mesh);
-    }
-    for (const mesh of this.physics.staticMeshes) {
-      if (mesh.visible) {
-        this.aimSurfaceTargets.push(mesh);
+    this.refreshAimSurfaceTargets();
+    this.aimVisibleSurfaceTargets.length = 0;
+    for (const target of this.aimSurfaceTargets) {
+      if (target.visible) {
+        this.aimVisibleSurfaceTargets.push(target);
       }
     }
-    if (this.aimSurfaceTargets.length === 0) {
+    if (this.aimVisibleSurfaceTargets.length === 0) {
       return false;
     }
 
     this.aimSurfaceHits.length = 0;
-    this.aimRaycaster.intersectObjects(this.aimSurfaceTargets, false, this.aimSurfaceHits);
+    this.aimRaycaster.intersectObjects(this.aimVisibleSurfaceTargets, false, this.aimSurfaceHits);
     const hit = this.aimSurfaceHits[0];
     if (!hit) {
       return false;
@@ -2873,6 +2958,30 @@ class Game {
       this.aimSurfaceNormal.copy(AIM_SURFACE_NORMAL);
     }
     return true;
+  }
+
+  private refreshAimSurfaceTargets(): void {
+    if (!this.aimSurfaceTargetsDirty) {
+      return;
+    }
+    this.aimSurfaceTargets.length = 0;
+    for (const object of this.physics.objects.values()) {
+      if (object.category === "projectile" || object.isDebris || object.zoneId === "surface") {
+        continue;
+      }
+      this.aimSurfaceTargets.push(object.mesh);
+    }
+    for (const mesh of this.physics.staticMeshes) {
+      this.aimSurfaceTargets.push(mesh);
+    }
+    this.aimSurfaceTargetsDirty = false;
+  }
+
+  private invalidateAimSurfaceTargets(): void {
+    this.aimSurfaceTargetsDirty = true;
+    this.aimSurfaceTargets.length = 0;
+    this.aimVisibleSurfaceTargets.length = 0;
+    this.aimSurfaceHits.length = 0;
   }
 
   private fire(): void {
@@ -2937,8 +3046,9 @@ class Game {
   }
 
   private detectImpact(active: ActiveProjectile): { point: THREE.Vector3; object: PhysicsObject | null } | null {
-    const current = vectorFromRapier(active.object.body.translation());
-    const previous = active.previousPosition.clone();
+    const translation = active.object.body.translation();
+    const current = this.projectileCurrentPosition.set(translation.x, translation.y, translation.z);
+    const previous = this.projectilePreviousPosition.copy(active.previousPosition);
 
     if (
       current.y < 0.18 ||
@@ -2948,11 +3058,11 @@ class Game {
       current.z > IMPACT_BOUNDS.maxZ
     ) {
       active.previousPosition.copy(current);
-      return { point: current, object: null };
+      return { point: current.clone(), object: null };
     }
 
     let best: { point: THREE.Vector3; object: PhysicsObject; distance: number } | null = null;
-    for (const object of this.physics.getSegmentCandidates(previous, current, active.radius + 0.28)) {
+    for (const object of this.physics.getSegmentCandidatesInto(this.projectileSegmentCandidates, previous, current, active.radius + 0.28)) {
       if (
         object.id === active.object.id ||
         active.piercedObjectIds.has(object.id) ||
@@ -3381,8 +3491,8 @@ class Game {
   private processDebrisImpacts(): ScoreEvent[] {
     const events: ScoreEvent[] = [];
     if (this.runState.phase === "aim" || this.runState.score) {
-      this.physics.drainCollisionEvents();
-      this.physics.drainSurfaceCollisionEvents();
+      this.physics.drainCollisionEventsInto(() => undefined);
+      this.physics.drainSurfaceCollisionEventsInto(() => undefined);
       return events;
     }
     const activeProjectile = this.runState.phase === "flight" ? this.projectiles.getActive() : null;
@@ -3398,60 +3508,67 @@ class Game {
     }
 
     let impactsThisFrame = 0;
-    const collisions = this.physics.drainCollisionEvents(CHAIN_COLLISION_DRAIN_MAX_PER_FRAME);
-    perfMonitor.addCount("collision.chainDrained", collisions.length);
-    for (const collision of collisions) {
-      if (impactsThisFrame >= CHAIN_IMPACT_MAX_PER_FRAME) {
-        break;
+    let projectileImpactHandled = false;
+    const chainCollisionsDrained = this.physics.drainCollisionEventsInto((collision) => {
+      if (projectileImpactHandled || impactsThisFrame >= CHAIN_IMPACT_MAX_PER_FRAME) {
+        return;
       }
       if (!collision.started) {
-        continue;
+        return;
       }
       if (activeProjectile) {
         const projectileTarget = projectileCollisionTarget(activeProjectile, collision);
         if (projectileTarget) {
-          const current = vectorFromRapier(activeProjectile.object.body.translation());
-          const previous = activeProjectile.previousPosition.clone();
+          const current = setVectorFromRapier(this.projectileCurrentPosition, activeProjectile.object.body.translation());
+          const previous = this.projectilePreviousPosition.copy(activeProjectile.previousPosition);
           const candidate = projectileImpactCandidate(activeProjectile, projectileTarget, previous, current);
           this.handleImpact(candidate?.point ?? closestPointOnObject(projectileTarget, current), activeProjectile, projectileTarget);
-          return events;
+          projectileImpactHandled = true;
+          return;
         }
       }
       const pair = chainCollisionPair(collision.first, collision.second);
       if (!pair) {
-        continue;
+        return;
       }
       const { source, target } = pair;
       if (!this.physics.getObject(source.id) || !this.physics.getObject(target.id)) {
-        continue;
+        return;
       }
-      const sourcePosition = vectorFromRapier(source.body.translation());
-      const targetPosition = vectorFromRapier(target.body.translation());
-      const relativeVelocity = impactVelocityAtTarget(source, target, sourcePosition, targetPosition);
+      const sourcePosition = setVectorFromRapier(this.chainSourcePosition, source.body.translation());
+      const targetPosition = setVectorFromRapier(this.chainTargetPosition, target.body.translation());
+      const relativeVelocity = impactVelocityAtTargetInto(
+        this.chainRelativeVelocity,
+        this.chainImpactLever,
+        source,
+        target,
+        sourcePosition,
+        targetPosition
+      );
       const relativeSpeedSq = velocityLengthSq(relativeVelocity);
       if (relativeSpeedSq < CHAIN_DEBRIS_MIN_SPEED * CHAIN_DEBRIS_MIN_SPEED) {
-        continue;
+        return;
       }
-      const towardTarget = targetPosition.clone().sub(sourcePosition);
+      const towardTarget = this.chainTowardTarget.copy(targetPosition).sub(sourcePosition);
       if (
         towardTarget.lengthSq() > 0.0001 &&
         relativeVelocity.x * towardTarget.x + relativeVelocity.y * towardTarget.y + relativeVelocity.z * towardTarget.z <= 0
       ) {
-        continue;
+        return;
       }
 
       const pairKey = `${source.id}:${target.id}`;
       if ((this.chainImpactCooldowns.get(pairKey) ?? 0) > now) {
-        continue;
+        return;
       }
       this.chainImpactCooldowns.set(pairKey, now + CHAIN_IMPACT_COOLDOWN_MS);
 
-      const origin = sourcePosition.clone().lerp(targetPosition, 0.5);
+      const origin = this.chainImpactOrigin.copy(sourcePosition).lerp(targetPosition, 0.5);
       const relativeSpeed = Math.sqrt(relativeSpeedSq);
       const result = this.destruction.impact(source, target, origin, relativeSpeed);
       const damaged = result.affectedObjects[0];
       if (!damaged?.fractured) {
-        continue;
+        return;
       }
 
       this.audio.playChainImpact({
@@ -3468,6 +3585,10 @@ class Game {
         this.particles.cityDebrisSpray(origin, result.dustColors, 0.35 + result.fracturedBodies * 0.04);
       }
       impactsThisFrame += 1;
+    }, CHAIN_COLLISION_DRAIN_MAX_PER_FRAME);
+    perfMonitor.addCount("collision.chainDrained", chainCollisionsDrained);
+    if (projectileImpactHandled) {
+      return events;
     }
     events.push(...this.processSurfaceImpacts(now));
     return events;
@@ -3475,45 +3596,43 @@ class Game {
 
   private processSurfaceImpacts(now: number): ScoreEvent[] {
     const events: ScoreEvent[] = [];
-    const processedObjectIds = new Set<number>();
+    const processedObjectIds = this.processedSurfaceImpactObjectIds;
+    processedObjectIds.clear();
     let surfaceCollisionsChecked = 0;
     let impactsThisFrame = 0;
-    const surfaceImpacts = this.physics.drainSurfaceCollisionEvents(SURFACE_COLLISION_MAX_PER_FRAME);
-    perfMonitor.addCount("collision.surfaceDrained", surfaceImpacts.length);
-    for (const surfaceImpact of surfaceImpacts) {
+    const surfaceImpactsDrained = this.physics.drainSurfaceCollisionEventsInto((surfaceImpact) => {
       if (surfaceCollisionsChecked >= SURFACE_COLLISION_MAX_PER_FRAME || impactsThisFrame >= SURFACE_IMPACT_MAX_PER_FRAME) {
-        break;
+        return;
       }
       surfaceCollisionsChecked += 1;
       if (!surfaceImpact.started || !isGroundSurface(surfaceImpact.surfaceLabel)) {
-        continue;
+        return;
       }
       const object = this.physics.getObject(surfaceImpact.object.id);
       if (!object || processedObjectIds.has(object.id)) {
-        continue;
+        return;
       }
       processedObjectIds.add(object.id);
       if (!object.destructible || !object.canFracture || object.bodyType !== "dynamic" || object.category === "projectile") {
-        continue;
+        return;
       }
       if ((this.surfaceImpactCooldowns.get(object.id) ?? 0) > now) {
-        continue;
+        return;
       }
 
       const downwardSpeed = Math.max(0, -surfaceImpact.impactVelocity.y);
       const impactSpeed = downwardSpeed + horizontalSpeed(surfaceImpact.impactVelocity) * 0.22;
       if (!canGroundImpactBreak(object, impactSpeed)) {
-        continue;
+        return;
       }
 
       this.surfaceImpactCooldowns.set(object.id, now + 520);
-      const objectPosition = vectorFromRapier(object.body.translation());
-      const origin = objectPosition.clone();
-      origin.y -= object.dimensions.y * 0.5;
+      const objectPosition = setVectorFromRapier(this.surfaceObjectPosition, object.body.translation());
+      const origin = this.surfaceImpactOrigin.set(objectPosition.x, objectPosition.y - object.dimensions.y * 0.5, objectPosition.z);
       const result = this.destruction.groundImpact(object, origin, impactSpeed);
       const damaged = result.affectedObjects[0];
       if (!damaged?.fractured) {
-        continue;
+        return;
       }
 
       this.audio.playChainImpact({
@@ -3529,7 +3648,8 @@ class Game {
         this.particles.cityDebrisSpray(origin, result.dustColors, 0.22 + result.fracturedBodies * 0.045);
       }
       impactsThisFrame += 1;
-    }
+    }, SURFACE_COLLISION_MAX_PER_FRAME);
+    perfMonitor.addCount("collision.surfaceDrained", surfaceImpactsDrained);
     return events;
   }
 
@@ -3572,6 +3692,7 @@ class Game {
         chainSource: true,
         destructible: false,
         canFracture: false,
+        collisionEvents: false,
         density: 1.2,
         scoreValue: 4,
         segments: 10
@@ -3938,6 +4059,10 @@ function vectorFromRapier(v: { x: number; y: number; z: number }): THREE.Vector3
   return new THREE.Vector3(v.x, v.y, v.z);
 }
 
+function setVectorFromRapier(target: THREE.Vector3, v: { x: number; y: number; z: number }): THREE.Vector3 {
+  return target.set(v.x, v.y, v.z);
+}
+
 function ignitionOriginForObject(object: PhysicsObject): THREE.Vector3 {
   const origin = vectorFromRapier(object.body.translation());
   origin.y += THREE.MathUtils.clamp(object.dimensions.y * 0.42, 0.26, 0.72);
@@ -3991,15 +4116,17 @@ function velocityLengthSq(velocity: { x: number; y: number; z: number }): number
   return velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z;
 }
 
-function impactVelocityAtTarget(
+function impactVelocityAtTargetInto(
+  out: THREE.Vector3,
+  lever: THREE.Vector3,
   source: PhysicsObject,
   target: PhysicsObject,
   sourcePosition: THREE.Vector3,
   targetPosition: THREE.Vector3
-): { x: number; y: number; z: number } {
+): THREE.Vector3 {
   const sourceVelocity = source.body.linvel();
   const targetVelocity = target.body.linvel();
-  const lever = targetPosition.clone().sub(sourcePosition);
+  lever.copy(targetPosition).sub(sourcePosition);
   const maxLever = Math.max(
     0.35,
     source.radius * 2.2,
@@ -4009,16 +4136,14 @@ function impactVelocityAtTarget(
     lever.setLength(maxLever);
   }
   const angularVelocity = source.body.angvel();
-  const tangentialVelocity = new THREE.Vector3(
-    angularVelocity.y * lever.z - angularVelocity.z * lever.y,
-    angularVelocity.z * lever.x - angularVelocity.x * lever.z,
-    angularVelocity.x * lever.y - angularVelocity.y * lever.x
+  const tangentialX = angularVelocity.y * lever.z - angularVelocity.z * lever.y;
+  const tangentialY = angularVelocity.z * lever.x - angularVelocity.x * lever.z;
+  const tangentialZ = angularVelocity.x * lever.y - angularVelocity.y * lever.x;
+  return out.set(
+    sourceVelocity.x + tangentialX - targetVelocity.x,
+    sourceVelocity.y + tangentialY - targetVelocity.y,
+    sourceVelocity.z + tangentialZ - targetVelocity.z
   );
-  return {
-    x: sourceVelocity.x + tangentialVelocity.x - targetVelocity.x,
-    y: sourceVelocity.y + tangentialVelocity.y - targetVelocity.y,
-    z: sourceVelocity.z + tangentialVelocity.z - targetVelocity.z
-  };
 }
 
 function chainCollisionPair(first: PhysicsObject, second: PhysicsObject): { source: PhysicsObject; target: PhysicsObject } | null {
@@ -4316,7 +4441,7 @@ function isGroundSurface(label: string): boolean {
   return label.toLowerCase().includes("floor");
 }
 
-function horizontalSpeed(velocity: THREE.Vector3): number {
+function horizontalSpeed(velocity: { x: number; z: number }): number {
   return Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
 }
 

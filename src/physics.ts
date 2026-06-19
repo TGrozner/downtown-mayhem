@@ -3,20 +3,25 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import type { MaterialDefinition, MaterialId } from "./materialCatalog";
 import { perfMonitor } from "./perf";
 
-const MAX_ACTIVE_DEBRIS = 260;
-const SETTLED_ACTIVE_DEBRIS_TARGET = 150;
-const MAX_FROZEN_RUBBLE = 720;
+const MAX_ACTIVE_DEBRIS = 235;
+const SETTLED_ACTIVE_DEBRIS_TARGET = 135;
+const MAX_FROZEN_RUBBLE = 650;
 const RUBBLE_FREEZE_INTERVAL_SECONDS = 0.18;
-const SETTLED_RUBBLE_MIN_AGE_MS = 680;
-const FORCED_RUBBLE_MIN_AGE_MS = 280;
+const SETTLED_RUBBLE_MIN_AGE_MS = 1250;
+const FORCED_RUBBLE_MIN_AGE_MS = 820;
 const MAX_RUBBLE_FREEZE_CENTER_Y = 0.78;
 const MAX_PHYSICS_SUBSTEPS_PER_FRAME = 2;
 const FROZEN_RUBBLE_BUCKET_CAPACITY = 512;
+const FROZEN_RUBBLE_BUCKET_TILE_SIZE = 12;
 const STATIC_DETAIL_BUCKET_CAPACITY = 1024;
 const STAGED_VISUAL_ACTIVATIONS_PER_FRAME = 32;
 const STAGED_VISUAL_ACTIVATION_MAX_MS = 0.7;
+const MAX_PENDING_CHAIN_COLLISION_EVENTS = 768;
+const MAX_PENDING_SURFACE_COLLISION_EVENTS = 320;
 const TRAFFIC_AVOIDANCE_PADDING = 0.38;
 const TRAFFIC_AVOIDANCE_MIN_DISTANCE = 1.05;
+const TRAFFIC_PLAN_CELL_SIZE = 4.5;
+const TRAFFIC_UP_AXIS = new THREE.Vector3(0, 1, 0);
 
 export type PhysicsCategory = "structure" | "projectile" | "debris";
 export type ScoreRole = "target" | "neutral";
@@ -50,7 +55,7 @@ export interface PhysicsSurfaceCollisionEvent {
   object: PhysicsObject;
   surfaceLabel: string;
   started: boolean;
-  impactVelocity: THREE.Vector3;
+  impactVelocity: { x: number; y: number; z: number };
 }
 
 export interface FrozenVisualHandle {
@@ -107,11 +112,16 @@ interface MotionSample {
 }
 
 interface TrafficAdvancePlan {
+  index: number;
   object: PhysicsObject;
   route: TrafficRoute;
   proposedRoute: TrafficRoute;
   current: THREE.Vector3;
   proposed: THREE.Vector3;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
   priority: number;
   blocked: boolean;
 }
@@ -279,31 +289,48 @@ export class PhysicsWorld {
   private readonly settledDebrisTarget = SETTLED_ACTIVE_DEBRIS_TARGET;
   private readonly maxFrozenDebris = MAX_FROZEN_RUBBLE;
   private readonly frozenDebrisRecords: FrozenRubbleRecord[] = [];
+  private frozenDebrisRecordHead = 0;
   private readonly frozenRubbleBuckets = new Map<string, FrozenRubbleBucket[]>();
   private readonly frozenRubbleWarmupBuckets = new Set<FrozenRubbleBucket>();
+  private readonly dirtyFrozenRubbleBuckets = new Set<FrozenRubbleBucket>();
   private readonly frozenRubbleScratchMatrix = new THREE.Matrix4();
   private readonly staticDetailRecords = new Map<number, StaticDetailRecord>();
   private readonly staticDetailBuckets = new Map<string, StaticDetailBucket[]>();
   private readonly staticDetailScratchMatrix = new THREE.Matrix4();
   private readonly stagedVisualActivationQueue: number[] = [];
   private stagedVisualActivationQueueHead = 0;
+  private readonly syncProxyPosition = new THREE.Vector3();
+  private readonly syncProxyRotation = new THREE.Quaternion();
+  private readonly querySeenObjectIds = new Set<number>();
+  private readonly aabbQueryHalfExtents = new THREE.Vector3();
+  private readonly segmentQueryCenter = new THREE.Vector3();
+  private readonly segmentQueryHalfExtents = new THREE.Vector3();
   private rubbleFreezeElapsed = 0;
   private readonly eventQueue = new RAPIER.EventQueue(true);
   private readonly colliderOwners = new Map<number, number>();
   private readonly trafficObjectIds = new Set<number>();
   private readonly trafficWaitTicks = new Map<number, number>();
+  private readonly trafficPlans: TrafficAdvancePlan[] = [];
+  private readonly trafficPlanPool: TrafficAdvancePlan[] = [];
+  private readonly trafficPlanBuckets = new Map<string, TrafficAdvancePlan[]>();
+  private readonly trafficComparedPlanPairs = new Set<number>();
+  private readonly trafficApplyRotation = new THREE.Quaternion();
+  private readonly trafficApplyVelocity = new THREE.Vector3();
   private readonly preStepVelocities = new Map<number, MotionSample>();
   private readonly surfaceColliderLabels = new Map<number, string>();
   private readonly releasedSupportGroups = new Set<string>();
-  private readonly pendingCollisionEvents: Array<{ firstId: number; secondId: number; started: boolean }> = [];
+  private readonly pendingCollisionEvents: Array<{ firstId: number; secondId: number; started: boolean; key: string }> = [];
   private pendingCollisionEventHead = 0;
+  private readonly pendingCollisionEventKeys = new Set<string>();
   private readonly pendingSurfaceCollisionEvents: Array<{
     objectId: number;
     surfaceLabel: string;
     started: boolean;
     impactVelocity: MotionSample;
+    key: string;
   }> = [];
   private pendingSurfaceCollisionEventHead = 0;
+  private readonly pendingSurfaceCollisionEventKeys = new Set<string>();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -330,23 +357,14 @@ export class PhysicsWorld {
         const firstId = this.colliderOwners.get(handle1);
         const secondId = this.colliderOwners.get(handle2);
         if (firstId !== undefined && secondId !== undefined) {
-          this.pendingCollisionEvents.push({ firstId, secondId, started });
+          this.queuePendingCollisionEvent(firstId, secondId, started);
           return;
         }
         const objectId = firstId ?? secondId;
         const surfaceHandle = firstId === undefined ? handle1 : handle2;
         const surfaceLabel = this.surfaceColliderLabels.get(surfaceHandle);
         if (objectId !== undefined && surfaceLabel) {
-          this.pendingSurfaceCollisionEvents.push({
-            objectId,
-            surfaceLabel,
-            started,
-            impactVelocity: this.preStepVelocities.get(objectId) ?? {
-              x: 0,
-              y: 0,
-              z: 0
-            }
-          });
+          this.queuePendingSurfaceCollisionEvent(objectId, surfaceLabel, started);
         }
       });
       perfMonitor.addTiming("physics.drainRapierEvents", startedAt);
@@ -366,6 +384,50 @@ export class PhysicsWorld {
       this.rubbleFreezeElapsed = 0;
       this.freezeSettledDebris();
     }
+  }
+
+  private queuePendingCollisionEvent(firstId: number, secondId: number, started: boolean): void {
+    const key = collisionEventKey(firstId, secondId);
+    if (this.pendingCollisionEventKeys.has(key)) {
+      perfMonitor.addCount("collision.chainEventsCoalesced");
+      return;
+    }
+    if (this.pendingCollisionEvents.length >= MAX_PENDING_CHAIN_COLLISION_EVENTS) {
+      this.compactPendingCollisionEvents();
+    }
+    if (this.pendingCollisionEvents.length - this.pendingCollisionEventHead >= MAX_PENDING_CHAIN_COLLISION_EVENTS) {
+      perfMonitor.addCount("collision.chainEventsDroppedByBacklog");
+      return;
+    }
+    this.pendingCollisionEventKeys.add(key);
+    this.pendingCollisionEvents.push({ firstId, secondId, started, key });
+  }
+
+  private queuePendingSurfaceCollisionEvent(objectId: number, surfaceLabel: string, started: boolean): void {
+    const key = surfaceCollisionEventKey(objectId, surfaceLabel);
+    if (this.pendingSurfaceCollisionEventKeys.has(key)) {
+      perfMonitor.addCount("collision.surfaceEventsCoalesced");
+      return;
+    }
+    if (this.pendingSurfaceCollisionEvents.length >= MAX_PENDING_SURFACE_COLLISION_EVENTS) {
+      this.compactPendingSurfaceCollisionEvents();
+    }
+    if (this.pendingSurfaceCollisionEvents.length - this.pendingSurfaceCollisionEventHead >= MAX_PENDING_SURFACE_COLLISION_EVENTS) {
+      perfMonitor.addCount("collision.surfaceEventsDroppedByBacklog");
+      return;
+    }
+    this.pendingSurfaceCollisionEventKeys.add(key);
+    this.pendingSurfaceCollisionEvents.push({
+      objectId,
+      surfaceLabel,
+      started,
+      key,
+      impactVelocity: this.preStepVelocities.get(objectId) ?? {
+        x: 0,
+        y: 0,
+        z: 0
+      }
+    });
   }
 
   addStaticBox(options: StaticBoxOptions): THREE.Mesh {
@@ -720,6 +782,7 @@ export class PhysicsWorld {
       clone.name = `${object.label} support release warmup`;
       clone.visible = true;
       clone.matrixAutoUpdate = true;
+      cloneWarmupOwnedMeshResources(clone);
       clone.traverse((child) => {
         child.visible = true;
         child.frustumCulled = false;
@@ -772,73 +835,127 @@ export class PhysicsWorld {
     this.frozenRubbleWarmupBuckets.clear();
   }
 
+  flushInstancedRenderBounds(): void {
+    if (this.dirtyFrozenRubbleBuckets.size === 0) {
+      return;
+    }
+    const startedAt = perfMonitor.timeStart();
+    let updated = 0;
+    for (const bucket of this.dirtyFrozenRubbleBuckets) {
+      if (bucket.count > 0) {
+        bucket.mesh.computeBoundingSphere();
+        bucket.mesh.frustumCulled = true;
+        updated += 1;
+      } else {
+        bucket.mesh.frustumCulled = false;
+      }
+    }
+    this.dirtyFrozenRubbleBuckets.clear();
+    perfMonitor.addCount("render.frozenRubbleBoundsUpdated", updated);
+    perfMonitor.addTiming("render.frozenRubbleBounds", startedAt);
+  }
+
   getBlastCandidates(origin: THREE.Vector3, radius: number): PhysicsObject[] {
-    return this.collectObjectsInAabb(origin, radius, (object) => object.category !== "projectile" && object.zoneId !== "surface");
+    return this.getBlastCandidatesInto([], origin, radius);
+  }
+
+  getBlastCandidatesInto(target: PhysicsObject[], origin: THREE.Vector3, radius: number): PhysicsObject[] {
+    target.length = 0;
+    return this.collectObjectsInAabbInto(target, origin, radius, (object) => object.category !== "projectile" && object.zoneId !== "surface");
   }
 
   getSegmentCandidates(previous: THREE.Vector3, current: THREE.Vector3, padding: number): PhysicsObject[] {
-    const center = new THREE.Vector3(
+    return this.getSegmentCandidatesInto([], previous, current, padding);
+  }
+
+  getSegmentCandidatesInto(target: PhysicsObject[], previous: THREE.Vector3, current: THREE.Vector3, padding: number): PhysicsObject[] {
+    target.length = 0;
+    this.segmentQueryCenter.set(
       (previous.x + current.x) * 0.5,
       (previous.y + current.y) * 0.5,
       (previous.z + current.z) * 0.5
     );
-    const halfExtents = new THREE.Vector3(
+    this.segmentQueryHalfExtents.set(
       Math.abs(current.x - previous.x) * 0.5 + padding,
       Math.abs(current.y - previous.y) * 0.5 + padding,
       Math.abs(current.z - previous.z) * 0.5 + padding
     );
-    return this.collectObjectsInAabb(center, halfExtents, () => true);
+    return this.collectObjectsInAabbInto(target, this.segmentQueryCenter, this.segmentQueryHalfExtents, () => true);
   }
 
   getObject(id: number): PhysicsObject | undefined {
     return this.objects.get(id);
   }
 
-  drainCollisionEvents(maxEvents = Number.POSITIVE_INFINITY): PhysicsCollisionEvent[] {
-    const events: PhysicsCollisionEvent[] = [];
+  drainCollisionEventsInto(
+    handleEvent: (event: PhysicsCollisionEvent) => void,
+    maxEvents = Number.POSITIVE_INFINITY
+  ): number {
     if (maxEvents <= 0) {
-      return events;
+      return 0;
     }
-    while (this.pendingCollisionEventHead < this.pendingCollisionEvents.length && events.length < maxEvents) {
+    let drained = 0;
+    while (this.pendingCollisionEventHead < this.pendingCollisionEvents.length && drained < maxEvents) {
       const event = this.pendingCollisionEvents[this.pendingCollisionEventHead];
       this.pendingCollisionEventHead += 1;
+      this.pendingCollisionEventKeys.delete(event.key);
       const first = this.objects.get(event.firstId);
       const second = this.objects.get(event.secondId);
       if (first && second) {
-        events.push({ first, second, started: event.started });
+        handleEvent({ first, second, started: event.started });
+        drained += 1;
       }
     }
     this.compactPendingCollisionEvents();
+    return drained;
+  }
+
+  drainCollisionEvents(maxEvents = Number.POSITIVE_INFINITY): PhysicsCollisionEvent[] {
+    const events: PhysicsCollisionEvent[] = [];
+    this.drainCollisionEventsInto((event) => events.push(event), maxEvents);
     return events;
+  }
+
+  drainSurfaceCollisionEventsInto(
+    handleEvent: (event: PhysicsSurfaceCollisionEvent) => void,
+    maxEvents = Number.POSITIVE_INFINITY
+  ): number {
+    if (maxEvents <= 0) {
+      return 0;
+    }
+    let drained = 0;
+    while (this.pendingSurfaceCollisionEventHead < this.pendingSurfaceCollisionEvents.length && drained < maxEvents) {
+      const event = this.pendingSurfaceCollisionEvents[this.pendingSurfaceCollisionEventHead];
+      this.pendingSurfaceCollisionEventHead += 1;
+      this.pendingSurfaceCollisionEventKeys.delete(event.key);
+      const object = this.objects.get(event.objectId);
+      if (object) {
+        handleEvent({
+          object,
+          surfaceLabel: event.surfaceLabel,
+          started: event.started,
+          impactVelocity: event.impactVelocity
+        });
+        drained += 1;
+      }
+    }
+    this.compactPendingSurfaceCollisionEvents();
+    return drained;
   }
 
   drainSurfaceCollisionEvents(maxEvents = Number.POSITIVE_INFINITY): PhysicsSurfaceCollisionEvent[] {
     const events: PhysicsSurfaceCollisionEvent[] = [];
-    if (maxEvents <= 0) {
-      return events;
-    }
-    while (this.pendingSurfaceCollisionEventHead < this.pendingSurfaceCollisionEvents.length && events.length < maxEvents) {
-      const event = this.pendingSurfaceCollisionEvents[this.pendingSurfaceCollisionEventHead];
-      this.pendingSurfaceCollisionEventHead += 1;
-      const object = this.objects.get(event.objectId);
-      if (object) {
-        events.push({
-          object,
-          surfaceLabel: event.surfaceLabel,
-          started: event.started,
-          impactVelocity: new THREE.Vector3(event.impactVelocity.x, event.impactVelocity.y, event.impactVelocity.z)
-        });
-      }
-    }
-    this.compactPendingSurfaceCollisionEvents();
+    this.drainSurfaceCollisionEventsInto((event) => events.push(event), maxEvents);
     return events;
   }
 
   advanceTrafficRoutes(deltaSeconds: number): void {
-    if (deltaSeconds <= 0) {
+    if (deltaSeconds <= 0 || this.trafficObjectIds.size === 0) {
       return;
     }
-    const plans: TrafficAdvancePlan[] = [];
+    const plans = this.trafficPlans;
+    plans.length = 0;
+    let planIndex = 0;
     for (const id of this.trafficObjectIds) {
       const object = this.objects.get(id);
       const route = object?.trafficRoute;
@@ -846,12 +963,19 @@ export class PhysicsWorld {
         continue;
       }
 
-      const current = vectorFromRapier(object.body.translation());
-      const proposed = current.clone();
-      const proposedRoute = cloneTrafficRoute(route);
+      const plan = this.acquireTrafficPlan(planIndex, object, route);
+      planIndex += 1;
+      const current = plan.current;
+      const proposed = plan.proposed;
+      const proposedRoute = plan.proposedRoute;
+      const translation = object.body.translation();
+      current.set(translation.x, translation.y, translation.z);
+      proposed.copy(current);
+      copyTrafficRoute(proposedRoute, route);
       if (route.waypoints && route.waypoints.length > 1) {
         advanceWaypointTraffic(proposed, proposedRoute, deltaSeconds);
-        plans.push(this.createTrafficPlan(object, route, proposedRoute, current, proposed));
+        this.updateTrafficPlan(plan);
+        plans.push(plan);
         continue;
       }
 
@@ -869,7 +993,8 @@ export class PhysicsWorld {
       next = THREE.MathUtils.clamp(next, min, max);
 
       setRouteCoordinate(proposed, proposedRoute.axis, next);
-      plans.push(this.createTrafficPlan(object, route, proposedRoute, current, proposed));
+      this.updateTrafficPlan(plan);
+      plans.push(plan);
     }
 
     this.resolveTrafficPlans(plans);
@@ -879,55 +1004,67 @@ export class PhysicsWorld {
         this.trafficWaitTicks.set(plan.object.id, (this.trafficWaitTicks.get(plan.object.id) ?? 0) + 1);
       } else {
         copyTrafficRouteState(plan.route, plan.proposedRoute);
-        applyTrafficBodyTransform(plan.object, plan.proposed, plan.route);
+        applyTrafficBodyTransform(plan.object, plan.proposed, plan.route, this.trafficApplyRotation, this.trafficApplyVelocity);
         this.trafficWaitTicks.delete(plan.object.id);
       }
     }
   }
 
-  private createTrafficPlan(
-    object: PhysicsObject,
-    route: TrafficRoute,
-    proposedRoute: TrafficRoute,
-    current: THREE.Vector3,
-    proposed: THREE.Vector3
-  ): TrafficAdvancePlan {
-    const waitTicks = this.trafficWaitTicks.get(object.id) ?? 0;
-    return {
-      object,
-      route,
-      proposedRoute,
-      current,
-      proposed,
-      priority: waitTicks * 100 + route.speed * 10 - object.id * 0.001,
-      blocked: horizontalDistanceSq(current, proposed) <= 0.0001
-    };
+  private acquireTrafficPlan(index: number, object: PhysicsObject, route: TrafficRoute): TrafficAdvancePlan {
+    let plan = this.trafficPlanPool[index];
+    if (!plan) {
+      plan = {
+        index,
+        object,
+        route,
+        proposedRoute: { ...route },
+        current: new THREE.Vector3(),
+        proposed: new THREE.Vector3(),
+        minX: 0,
+        maxX: 0,
+        minZ: 0,
+        maxZ: 0,
+        priority: 0,
+        blocked: false
+      };
+      this.trafficPlanPool[index] = plan;
+    }
+    plan.index = index;
+    plan.object = object;
+    plan.route = route;
+    return plan;
+  }
+
+  private updateTrafficPlan(plan: TrafficAdvancePlan): void {
+    const waitTicks = this.trafficWaitTicks.get(plan.object.id) ?? 0;
+    plan.minX = Math.min(plan.current.x, plan.proposed.x);
+    plan.maxX = Math.max(plan.current.x, plan.proposed.x);
+    plan.minZ = Math.min(plan.current.z, plan.proposed.z);
+    plan.maxZ = Math.max(plan.current.z, plan.proposed.z);
+    plan.priority = waitTicks * 100 + plan.route.speed * 10 - plan.object.id * 0.001;
+    plan.blocked = horizontalDistanceSq(plan.current, plan.proposed) <= 0.0001;
   }
 
   private resolveTrafficPlans(plans: TrafficAdvancePlan[]): void {
-    for (let i = 0; i < plans.length; i += 1) {
-      const first = plans[i];
-      if (first.blocked) {
-        continue;
-      }
-      for (let j = i + 1; j < plans.length; j += 1) {
-        const second = plans[j];
-        if (second.blocked || !trafficPlansConflict(first, second)) {
-          continue;
-        }
-        const firstYields = isVehicleAheadOnSameLane(first, second);
-        const secondYields = isVehicleAheadOnSameLane(second, first);
-        if (firstYields && !secondYields) {
-          first.blocked = true;
-          break;
-        }
-        if (secondYields && !firstYields) {
-          second.blocked = true;
-        } else if (first.priority >= second.priority) {
-          second.blocked = true;
-        } else {
-          first.blocked = true;
-          break;
+    this.buildTrafficPlanBuckets(plans);
+    const comparedPairs = this.trafficComparedPlanPairs;
+    comparedPairs.clear();
+    const planCount = Math.max(1, plans.length);
+    let comparisons = 0;
+    for (const bucket of this.trafficPlanBuckets.values()) {
+      for (let i = 0; i < bucket.length; i += 1) {
+        const first = bucket[i];
+        for (let j = i + 1; j < bucket.length; j += 1) {
+          const second = bucket[j];
+          const lowIndex = first.index < second.index ? first.index : second.index;
+          const highIndex = first.index < second.index ? second.index : first.index;
+          const pairKey = lowIndex * planCount + highIndex;
+          if (comparedPairs.has(pairKey)) {
+            continue;
+          }
+          comparedPairs.add(pairKey);
+          comparisons += 1;
+          this.resolveTrafficPlanPair(first, second);
         }
       }
     }
@@ -940,11 +1077,56 @@ export class PhysicsWorld {
         if (other.object.id === plan.object.id || !other.blocked) {
           continue;
         }
-        if (isTrafficObjectOccupyingPath(plan, other.object, other.current)) {
+        if (trafficPlanCanReachObject(plan, other) && isTrafficObjectOccupyingPath(plan, other.object, other.current)) {
           plan.blocked = true;
           break;
         }
       }
+    }
+    perfMonitor.addCount("traffic.planComparisons", comparisons);
+    perfMonitor.addCount("traffic.planBuckets", this.trafficPlanBuckets.size);
+  }
+
+  private buildTrafficPlanBuckets(plans: TrafficAdvancePlan[]): void {
+    for (const bucket of this.trafficPlanBuckets.values()) {
+      bucket.length = 0;
+    }
+    for (const plan of plans) {
+      const clearance = trafficPlanMaxClearance(plan);
+      const minCellX = Math.floor((plan.minX - clearance) / TRAFFIC_PLAN_CELL_SIZE);
+      const maxCellX = Math.floor((plan.maxX + clearance) / TRAFFIC_PLAN_CELL_SIZE);
+      const minCellZ = Math.floor((plan.minZ - clearance) / TRAFFIC_PLAN_CELL_SIZE);
+      const maxCellZ = Math.floor((plan.maxZ + clearance) / TRAFFIC_PLAN_CELL_SIZE);
+      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+        for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+          const key = `${cellX}:${cellZ}`;
+          let bucket = this.trafficPlanBuckets.get(key);
+          if (!bucket) {
+            bucket = [];
+            this.trafficPlanBuckets.set(key, bucket);
+          }
+          bucket.push(plan);
+        }
+      }
+    }
+  }
+
+  private resolveTrafficPlanPair(first: TrafficAdvancePlan, second: TrafficAdvancePlan): void {
+    if (first.blocked || second.blocked || !trafficPlanBoundsMayOverlap(first, second) || !trafficPlansConflict(first, second)) {
+      return;
+    }
+    const firstYields = isVehicleAheadOnSameLane(first, second);
+    const secondYields = isVehicleAheadOnSameLane(second, first);
+    if (firstYields && !secondYields) {
+      first.blocked = true;
+      return;
+    }
+    if (secondYields && !firstYields) {
+      second.blocked = true;
+    } else if (first.priority >= second.priority) {
+      second.blocked = true;
+    } else {
+      first.blocked = true;
     }
   }
 
@@ -1037,10 +1219,9 @@ export class PhysicsWorld {
       const translation = object.body.translation();
       const rotation = object.body.rotation();
       if (object.visualProxy) {
-        object.visualProxy.sync(
-          new THREE.Vector3(translation.x, translation.y, translation.z),
-          new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w)
-        );
+        this.syncProxyPosition.set(translation.x, translation.y, translation.z);
+        this.syncProxyRotation.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        object.visualProxy.sync(this.syncProxyPosition, this.syncProxyRotation);
         continue;
       }
       object.mesh.position.set(translation.x, translation.y, translation.z);
@@ -1135,7 +1316,7 @@ export class PhysicsWorld {
         object.body.setAngularDamping(supportRelease && sameStack ? 0.08 : 1.24);
         const massScale = supportRelease && sameStack ? object.supportReleaseMassScale ?? 1.15 : 3.4;
         object.body.setAdditionalMass(object.dimensions.x * object.dimensions.y * object.dimensions.z * massScale, true);
-        object.body.enableCcd(true);
+        object.body.enableCcd(shouldEnableSupportReleaseCcd(object, supportRelease !== undefined && sameStack));
       } else {
         object.body.wakeUp();
       }
@@ -1208,7 +1389,7 @@ export class PhysicsWorld {
   }
 
   private freezeSettledDebris(): void {
-    if (this.activeDebrisCount() <= this.settledDebrisTarget || this.frozenDebrisRecords.length >= this.maxFrozenDebris) {
+    if (this.activeDebrisCount() <= this.settledDebrisTarget || this.activeFrozenDebrisCount() >= this.maxFrozenDebris) {
       return;
     }
 
@@ -1216,7 +1397,7 @@ export class PhysicsWorld {
     let activeCount = this.activeDebrisCount();
     for (
       let i = this.debrisQueueHead;
-      i < this.debrisQueue.length && activeCount > this.settledDebrisTarget && this.frozenDebrisRecords.length < this.maxFrozenDebris;
+      i < this.debrisQueue.length && activeCount > this.settledDebrisTarget && this.activeFrozenDebrisCount() < this.maxFrozenDebris;
       i += 1
     ) {
       const id = this.debrisQueue[i];
@@ -1313,11 +1494,12 @@ export class PhysicsWorld {
     bucket.mesh.count = bucket.count;
     bucket.mesh.visible = true;
     bucket.mesh.instanceMatrix.needsUpdate = true;
+    this.markFrozenRubbleBucketDirty(bucket);
     record.instances.push({ bucket, index });
   }
 
   private getFrozenRubbleBucket(part: FrozenRubblePart): FrozenRubbleBucket {
-    const key = frozenRubbleBucketKey(part);
+    const key = frozenRubbleSpatialBucketKey(part);
     let buckets = this.frozenRubbleBuckets.get(key);
     if (!buckets) {
       buckets = [];
@@ -1373,10 +1555,12 @@ export class PhysicsWorld {
     bucket.mesh.count = bucket.count;
     bucket.mesh.visible = bucket.count > 0;
     bucket.mesh.instanceMatrix.needsUpdate = true;
+    this.markFrozenRubbleBucketDirty(bucket);
   }
 
   private disposeFrozenRubbleBuckets(): void {
     this.frozenRubbleWarmupBuckets.clear();
+    this.dirtyFrozenRubbleBuckets.clear();
     for (const buckets of this.frozenRubbleBuckets.values()) {
       for (const bucket of buckets) {
         this.scene.remove(bucket.mesh);
@@ -1385,6 +1569,11 @@ export class PhysicsWorld {
       }
     }
     this.frozenRubbleBuckets.clear();
+  }
+
+  private markFrozenRubbleBucketDirty(bucket: FrozenRubbleBucket): void {
+    bucket.mesh.frustumCulled = false;
+    this.dirtyFrozenRubbleBuckets.add(bucket);
   }
 
   private createStaticDetailRecord(object: PhysicsObject): StaticDetailRecord | null {
@@ -1568,20 +1757,45 @@ export class PhysicsWorld {
   }
 
   private trimFrozenDebris(): void {
-    while (this.frozenDebrisRecords.length > this.maxFrozenDebris) {
-      const record = this.frozenDebrisRecords.shift();
+    while (this.activeFrozenDebrisCount() > this.maxFrozenDebris) {
+      const record = this.frozenDebrisRecords[this.frozenDebrisRecordHead];
+      this.frozenDebrisRecordHead += 1;
       if (record) {
         this.removeFrozenDebrisRecord(record);
       }
     }
+    this.compactFrozenDebrisRecords();
   }
 
   private clearFrozenDebris(): void {
-    for (const record of this.frozenDebrisRecords) {
-      this.removeFrozenDebrisRecord(record);
+    for (let index = this.frozenDebrisRecordHead; index < this.frozenDebrisRecords.length; index += 1) {
+      const record = this.frozenDebrisRecords[index];
+      if (record) {
+        this.removeFrozenDebrisRecord(record);
+      }
     }
     this.frozenDebrisRecords.length = 0;
+    this.frozenDebrisRecordHead = 0;
     this.disposeFrozenRubbleBuckets();
+  }
+
+  private activeFrozenDebrisCount(): number {
+    return this.frozenDebrisRecords.length - this.frozenDebrisRecordHead;
+  }
+
+  private compactFrozenDebrisRecords(): void {
+    if (this.frozenDebrisRecordHead === 0) {
+      return;
+    }
+    if (this.frozenDebrisRecordHead >= this.frozenDebrisRecords.length) {
+      this.frozenDebrisRecords.length = 0;
+      this.frozenDebrisRecordHead = 0;
+      return;
+    }
+    if (this.frozenDebrisRecordHead > 128 && this.frozenDebrisRecordHead * 2 > this.frozenDebrisRecords.length) {
+      this.frozenDebrisRecords.splice(0, this.frozenDebrisRecordHead);
+      this.frozenDebrisRecordHead = 0;
+    }
   }
 
   private removeFrozenDebrisRecord(record: FrozenRubbleRecord): void {
@@ -1626,8 +1840,10 @@ export class PhysicsWorld {
   private clearPendingEvents(): void {
     this.pendingCollisionEvents.length = 0;
     this.pendingCollisionEventHead = 0;
+    this.pendingCollisionEventKeys.clear();
     this.pendingSurfaceCollisionEvents.length = 0;
     this.pendingSurfaceCollisionEventHead = 0;
+    this.pendingSurfaceCollisionEventKeys.clear();
   }
 
   private compactPendingCollisionEvents(): void {
@@ -1666,10 +1882,20 @@ export class PhysicsWorld {
     include: (object: PhysicsObject) => boolean
   ): PhysicsObject[] {
     const results: PhysicsObject[] = [];
-    const seen = new Set<number>();
+    return this.collectObjectsInAabbInto(results, center, halfExtentsOrRadius, include);
+  }
+
+  private collectObjectsInAabbInto(
+    results: PhysicsObject[],
+    center: THREE.Vector3,
+    halfExtentsOrRadius: THREE.Vector3 | number,
+    include: (object: PhysicsObject) => boolean
+  ): PhysicsObject[] {
+    const seen = this.querySeenObjectIds;
+    seen.clear();
     const halfExtents =
       typeof halfExtentsOrRadius === "number"
-        ? { x: halfExtentsOrRadius, y: halfExtentsOrRadius, z: halfExtentsOrRadius }
+        ? this.aabbQueryHalfExtents.set(halfExtentsOrRadius, halfExtentsOrRadius, halfExtentsOrRadius)
         : halfExtentsOrRadius;
     this.world.collidersWithAabbIntersectingAabb(center, halfExtents, (collider) => {
       const id = this.colliderOwners.get(collider.handle);
@@ -1746,16 +1972,26 @@ function frozenRubbleBucketKey(part: FrozenRubblePart): string {
   return `${part.geometry.uuid}:${part.material.uuid}:${part.renderOrder}:${part.castShadow ? 1 : 0}:${part.receiveShadow ? 1 : 0}`;
 }
 
-function vectorFromRapier(v: { x: number; y: number; z: number }): THREE.Vector3 {
-  return new THREE.Vector3(v.x, v.y, v.z);
+function frozenRubbleSpatialBucketKey(part: FrozenRubblePart): string {
+  const elements = part.matrix.elements;
+  const tileX = Math.floor(elements[12] / FROZEN_RUBBLE_BUCKET_TILE_SIZE);
+  const tileZ = Math.floor(elements[14] / FROZEN_RUBBLE_BUCKET_TILE_SIZE);
+  return `${frozenRubbleBucketKey(part)}:${tileX}:${tileZ}`;
 }
 
 function vectorLengthSq(v: { x: number; y: number; z: number }): number {
   return v.x * v.x + v.y * v.y + v.z * v.z;
 }
 
-function cloneTrafficRoute(route: TrafficRoute): TrafficRoute {
-  return { ...route, waypoints: route.waypoints };
+function copyTrafficRoute(target: TrafficRoute, source: TrafficRoute): void {
+  target.axis = source.axis;
+  target.min = source.min;
+  target.max = source.max;
+  target.speed = source.speed;
+  target.direction = source.direction;
+  target.laneOffset = source.laneOffset;
+  target.waypoints = source.waypoints;
+  target.segmentIndex = source.segmentIndex;
 }
 
 function copyTrafficRouteState(target: TrafficRoute, source: TrafficRoute): void {
@@ -1800,9 +2036,22 @@ function advanceWaypointTraffic(position: THREE.Vector3, route: TrafficRoute, de
   route.segmentIndex = segmentIndex;
 }
 
-function applyTrafficBodyTransform(object: PhysicsObject, position: THREE.Vector3, route: TrafficRoute): void {
-  const velocity = trafficVelocity(route);
-  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, trafficYaw(route), 0));
+function applyTrafficBodyTransform(
+  object: PhysicsObject,
+  position: THREE.Vector3,
+  route: TrafficRoute,
+  rotation: THREE.Quaternion,
+  velocity: THREE.Vector3
+): void {
+  const waypointDirection = trafficWaypointDirection(route);
+  if (waypointDirection) {
+    velocity.set(waypointDirection.x * route.speed, 0, waypointDirection.z * route.speed);
+  } else if (route.axis === "x") {
+    velocity.set(route.speed * route.direction, 0, 0);
+  } else {
+    velocity.set(0, 0, route.speed * route.direction);
+  }
+  rotation.setFromAxisAngle(TRAFFIC_UP_AXIS, trafficYaw(route, waypointDirection));
   object.body.wakeUp();
   object.body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
   object.body.setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w }, true);
@@ -1843,19 +2092,7 @@ function setTrafficLaneCoordinate(position: THREE.Vector3, route: TrafficRoute):
   }
 }
 
-function trafficVelocity(route: TrafficRoute): THREE.Vector3 {
-  const waypointDirection = trafficWaypointDirection(route);
-  if (waypointDirection) {
-    return new THREE.Vector3(waypointDirection.x * route.speed, 0, waypointDirection.z * route.speed);
-  }
-  if (route.axis === "x") {
-    return new THREE.Vector3(route.speed * route.direction, 0, 0);
-  }
-  return new THREE.Vector3(0, 0, route.speed * route.direction);
-}
-
-function trafficYaw(route: TrafficRoute): number {
-  const waypointDirection = trafficWaypointDirection(route);
+function trafficYaw(route: TrafficRoute, waypointDirection: { x: number; z: number } | null = trafficWaypointDirection(route)): number {
   if (waypointDirection) {
     return Math.atan2(waypointDirection.x, waypointDirection.z);
   }
@@ -1895,10 +2132,45 @@ function horizontalDistanceSq(a: { x: number; z: number }, b: { x: number; z: nu
 function trafficPlansConflict(first: TrafficAdvancePlan, second: TrafficAdvancePlan): boolean {
   const clearance = trafficClearance(first.object, second.object);
   const clearanceSq = clearance * clearance;
+  if (!trafficPlanBoundsMayOverlap(first, second, clearance)) {
+    return false;
+  }
   return (
     horizontalDistanceSq(first.proposed, second.proposed) < clearanceSq ||
     horizontalSegmentDistanceSq(first.current, first.proposed, second.current, second.proposed) < clearanceSq
   );
+}
+
+function trafficPlanMaxClearance(plan: TrafficAdvancePlan): number {
+  const footprint = Math.max(plan.object.dimensions.x, plan.object.dimensions.z);
+  return Math.max(TRAFFIC_AVOIDANCE_MIN_DISTANCE * 1.6, footprint * 0.62 + TRAFFIC_AVOIDANCE_PADDING + TRAFFIC_AVOIDANCE_MIN_DISTANCE);
+}
+
+function trafficPlanBoundsMayOverlap(first: TrafficAdvancePlan, second: TrafficAdvancePlan, clearance = trafficClearance(first.object, second.object)): boolean {
+  return (
+    first.minX - clearance <= second.maxX &&
+    first.maxX + clearance >= second.minX &&
+    first.minZ - clearance <= second.maxZ &&
+    first.maxZ + clearance >= second.minZ
+  );
+}
+
+function trafficPlanCanReachObject(plan: TrafficAdvancePlan, other: TrafficAdvancePlan): boolean {
+  const clearance = trafficOccupiedClearance(plan.object, other.object);
+  return (
+    plan.minX - clearance <= other.current.x &&
+    plan.maxX + clearance >= other.current.x &&
+    plan.minZ - clearance <= other.current.z &&
+    plan.maxZ + clearance >= other.current.z
+  );
+}
+
+function collisionEventKey(firstId: number, secondId: number): string {
+  return firstId < secondId ? `${firstId}:${secondId}` : `${secondId}:${firstId}`;
+}
+
+function surfaceCollisionEventKey(objectId: number, surfaceLabel: string): string {
+  return `${objectId}:${surfaceLabel}`;
 }
 
 function trafficClearance(first: PhysicsObject, second: PhysicsObject): number {
@@ -2031,7 +2303,7 @@ function shouldEnableBoxCollisionEvents(options: DynamicBoxOptions, bodyType: Ph
   if (bodyType !== "dynamic") {
     return false;
   }
-  return Boolean(options.chainSource || options.isDebris || options.destructible !== false || options.canFracture !== false);
+  return Boolean(options.chainSource);
 }
 
 function shouldEnableSphereCollisionEvents(options: DynamicSphereOptions): boolean {
@@ -2041,7 +2313,14 @@ function shouldEnableSphereCollisionEvents(options: DynamicSphereOptions): boole
   if (options.category === "projectile") {
     return true;
   }
-  return Boolean(options.chainSource || options.isDebris || options.destructible !== false || options.canFracture !== false);
+  return Boolean(options.chainSource);
+}
+
+function shouldEnableSupportReleaseCcd(object: PhysicsObject, sameSupportGroup: boolean): boolean {
+  if (!sameSupportGroup) {
+    return false;
+  }
+  return Math.max(object.dimensions.x, object.dimensions.y, object.dimensions.z) >= 1.25;
 }
 
 function supportReleaseConfig(
@@ -2101,6 +2380,31 @@ function disposeMeshTree(root: THREE.Mesh): void {
       }
     }
   });
+}
+
+function cloneWarmupOwnedMeshResources(root: THREE.Object3D): void {
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+
+    const geometry = child.geometry.clone();
+    geometry.userData = { ...child.geometry.userData, renderWarmupOwned: true, sharedGeometry: false };
+    child.geometry = geometry;
+
+    if (Array.isArray(child.material)) {
+      child.material = child.material.map(cloneWarmupOwnedMaterial);
+    } else {
+      child.material = cloneWarmupOwnedMaterial(child.material);
+    }
+    child.userData.disposeMaterial = true;
+  });
+}
+
+function cloneWarmupOwnedMaterial(material: THREE.Material): THREE.Material {
+  const clone = material.clone();
+  clone.userData = { ...material.userData, renderWarmupOwned: true };
+  return clone;
 }
 
 const boxGeometryCache = new Map<string, THREE.BoxGeometry>();

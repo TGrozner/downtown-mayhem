@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { effectiveGraphicsPixelRatio } from "./settings";
 
 type CameraMode = "cannon" | "projectile" | "spectacle";
 
@@ -138,7 +139,7 @@ export class CameraRig {
     this.camera.fov = height > width ? 70 : 62;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelRatioCap));
+    this.renderer.setPixelRatio(effectiveGraphicsPixelRatio(this.pixelRatioCap));
     this.renderer.setSize(width, height);
   }
 }

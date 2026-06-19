@@ -3,6 +3,7 @@ import {
   DEFAULT_GAME_SETTINGS,
   GAME_SETTINGS_STORAGE_KEY,
   type SettingsStorage,
+  effectiveGraphicsPixelRatio,
   graphicsPixelRatioCap,
   loadGameSettings,
   sanitizeGameSettings,
@@ -71,6 +72,13 @@ describe("game settings", () => {
     expect(graphicsPixelRatioCap("performance")).toBe(1.15);
     expect(graphicsPixelRatioCap("balanced")).toBe(1.5);
     expect(graphicsPixelRatioCap("cinematic")).toBe(2.25);
+  });
+
+  test("clamps renderer pixel ratio to the device ratio and quality cap", () => {
+    expect(effectiveGraphicsPixelRatio(1.5, 1)).toBe(1);
+    expect(effectiveGraphicsPixelRatio(1.5, 2)).toBe(1.5);
+    expect(effectiveGraphicsPixelRatio(2.25, 3)).toBe(2.25);
+    expect(effectiveGraphicsPixelRatio(1.15, 0)).toBe(1);
   });
 });
 

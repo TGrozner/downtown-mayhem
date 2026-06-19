@@ -205,39 +205,52 @@ export class Cannon {
   private updateTrajectory(projectile: ProjectileDefinition, powerScale: number, sizeScale: number): void {
     const origin = this.getLaunchPosition(projectile.baseRadius * sizeScale);
     const velocity = this.getDirection().multiplyScalar(projectile.speed * powerScale);
-    const gravity = new THREE.Vector3(0, -9.81, 0);
     const endpoint = this.trajectoryAimPointActive ? this.trajectoryAimPoint : null;
-    const endpointOffset = endpoint?.clone().sub(origin);
-    const endpointHorizontalDistance = endpointOffset ? Math.hypot(endpointOffset.x, endpointOffset.z) : 0;
-    const endpointDirectionX = endpointOffset && endpointHorizontalDistance > 0.001 ? endpointOffset.x / endpointHorizontalDistance : 0;
-    const endpointDirectionZ = endpointOffset && endpointHorizontalDistance > 0.001 ? endpointOffset.z / endpointHorizontalDistance : 0;
-    let impactPoint: THREE.Vector3 | null = null;
+    const endpointOffsetX = endpoint ? endpoint.x - origin.x : 0;
+    const endpointOffsetZ = endpoint ? endpoint.z - origin.z : 0;
+    const endpointHorizontalDistance = endpoint ? Math.hypot(endpointOffsetX, endpointOffsetZ) : 0;
+    const endpointDirectionX = endpoint && endpointHorizontalDistance > 0.001 ? endpointOffsetX / endpointHorizontalDistance : 0;
+    const endpointDirectionZ = endpoint && endpointHorizontalDistance > 0.001 ? endpointOffsetZ / endpointHorizontalDistance : 0;
+    let impactPointActive = false;
+    let impactX = 0;
+    let impactY = 0.035;
+    let impactZ = 0;
     for (let i = 0; i < 48; i += 1) {
       const t = i * 0.105;
-      let point: THREE.Vector3;
-      if (impactPoint) {
-        point = impactPoint;
+      let x: number;
+      let y: number;
+      let z: number;
+      if (impactPointActive) {
+        x = impactX;
+        y = impactY;
+        z = impactZ;
       } else {
-        point = origin
-          .clone()
-          .add(velocity.clone().multiplyScalar(t))
-          .add(gravity.clone().multiplyScalar(0.5 * t * t));
+        x = origin.x + velocity.x * t;
+        y = origin.y + velocity.y * t - 4.905 * t * t;
+        z = origin.z + velocity.z * t;
       }
-      if (!impactPoint && endpoint && endpointHorizontalDistance > 0.001) {
-        const pointOffset = point.clone().sub(origin);
-        const horizontalProgress = pointOffset.x * endpointDirectionX + pointOffset.z * endpointDirectionZ;
+      if (!impactPointActive && endpoint && endpointHorizontalDistance > 0.001) {
+        const horizontalProgress = (x - origin.x) * endpointDirectionX + (z - origin.z) * endpointDirectionZ;
         if (horizontalProgress >= endpointHorizontalDistance) {
-          point.copy(endpoint);
-          impactPoint = endpoint.clone();
+          x = endpoint.x;
+          y = endpoint.y;
+          z = endpoint.z;
+          impactX = x;
+          impactY = y;
+          impactZ = z;
+          impactPointActive = true;
         }
       }
-      if (!impactPoint && point.y <= 0.035) {
-        point.y = 0.035;
-        impactPoint = point.clone();
+      if (!impactPointActive && y <= 0.035) {
+        y = 0.035;
+        impactX = x;
+        impactY = y;
+        impactZ = z;
+        impactPointActive = true;
       }
-      this.trajectoryPositions[i * 3] = point.x;
-      this.trajectoryPositions[i * 3 + 1] = Math.max(0.035, point.y);
-      this.trajectoryPositions[i * 3 + 2] = point.z;
+      this.trajectoryPositions[i * 3] = x;
+      this.trajectoryPositions[i * 3 + 1] = Math.max(0.035, y);
+      this.trajectoryPositions[i * 3 + 2] = z;
     }
     this.trajectory.geometry.attributes.position.needsUpdate = true;
   }

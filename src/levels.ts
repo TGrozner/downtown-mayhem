@@ -2179,7 +2179,7 @@ function addStrategicHazardBox(
     restitution: options.kind === "combustible" ? 0.18 : 0.1,
     linearDamping: 0.1,
     angularDamping: 0.22,
-    ccd: true
+    ccd: false
   });
   decorateHazardIndicator(object.mesh, { size: options.size, kind: options.kind });
   decorateStrategicHazard(object.mesh, { label: options.label, size: options.size, kind: options.kind });
@@ -2318,7 +2318,7 @@ function spawnPowerGrid(context: LevelContext): void {
       restitution: 0.12,
       linearDamping: 0.12,
       angularDamping: 0.24,
-      ccd: true
+      ccd: false
     });
     decorateHazardIndicator(object.mesh, { size, kind: "electric" });
     object.mesh.userData.disposeMaterial = false;
@@ -2363,7 +2363,7 @@ function addHazardRelay(
     restitution: type === "springPad" ? 0.74 : 0.22,
     linearDamping: 0.08,
     angularDamping: 0.18,
-    ccd: true
+    ccd: false
   });
   decorateHazardIndicator(object.mesh, { size, kind: type === "springPad" ? "combustible" : type === "transformer" ? "electric" : "explosive" });
   object.mesh.userData.disposeMaterial = true;
@@ -2896,7 +2896,7 @@ function spawnStreetSetpieces(context: LevelContext): void {
       scoreValue: 12,
       restitution: 0.45,
       chainSource: true,
-      ccd: true
+      ccd: false
     });
     decorateTrafficBarricade(object.mesh, { size, detail: "lean" });
     decorateHazardIndicator(object.mesh, { size, kind: "combustible" });
@@ -3156,7 +3156,7 @@ function addStreetCargo(
     restitution: materialId === "foam" ? 0.36 : 0.18,
     linearDamping: 0.08,
     angularDamping: 0.18,
-    ccd: true
+    ccd: false
   });
   decorateStreetCargo(object.mesh, { size, materialId, detail: "lean" });
   if (label.toLowerCase().includes("power cable")) {

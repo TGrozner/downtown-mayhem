@@ -29,6 +29,7 @@ class PerfMonitor {
   private currentFrame: PerfFrameSnapshot | null = null;
   private frameStartedAt = 0;
   private readonly slowFrames: PerfFrameSnapshot[] = [];
+  private slowFrameStart = 0;
   private readonly counterTotals: Record<string, number> = {};
   private readonly counterMax: Record<string, number> = {};
 
@@ -91,22 +92,20 @@ class PerfMonitor {
     }
     if (frame.totalMs >= SLOW_FRAME_MS) {
       this.slowFrameCount += 1;
-      this.slowFrames.push(frame);
-      while (this.slowFrames.length > MAX_SLOW_FRAMES) {
-        this.slowFrames.shift();
-      }
+      this.recordSlowFrame(frame);
     }
     this.currentFrame = null;
   }
 
   report(): PerfReport {
+    const recentSlowFrames = this.orderedSlowFrames().map(cloneFrame);
     return {
       enabled: this.enabled,
       frameCount: this.frameCount,
       slowFrameCount: this.slowFrameCount,
       maxFrameMs: this.maxFrame?.totalMs ?? 0,
       maxFrame: this.maxFrame ? cloneFrame(this.maxFrame) : null,
-      recentSlowFrames: this.slowFrames.map(cloneFrame),
+      recentSlowFrames,
       counterTotals: { ...this.counterTotals },
       counterMax: { ...this.counterMax }
     };
@@ -118,8 +117,25 @@ class PerfMonitor {
     this.maxFrame = null;
     this.currentFrame = null;
     this.slowFrames.length = 0;
+    this.slowFrameStart = 0;
     clearRecord(this.counterTotals);
     clearRecord(this.counterMax);
+  }
+
+  private recordSlowFrame(frame: PerfFrameSnapshot): void {
+    if (this.slowFrames.length < MAX_SLOW_FRAMES) {
+      this.slowFrames.push(frame);
+      return;
+    }
+    this.slowFrames[this.slowFrameStart] = frame;
+    this.slowFrameStart = (this.slowFrameStart + 1) % MAX_SLOW_FRAMES;
+  }
+
+  private orderedSlowFrames(): PerfFrameSnapshot[] {
+    if (this.slowFrames.length < MAX_SLOW_FRAMES || this.slowFrameStart === 0) {
+      return this.slowFrames;
+    }
+    return this.slowFrames.slice(this.slowFrameStart).concat(this.slowFrames.slice(0, this.slowFrameStart));
   }
 }
 

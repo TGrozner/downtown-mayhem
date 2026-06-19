@@ -21,7 +21,7 @@ export interface SettingsStorage {
 export const DEFAULT_GAME_SETTINGS: GameSettings = {
   graphicsQuality: "balanced",
   rendererBackend: "auto",
-  antialias: true,
+  antialias: false,
   masterVolume: 0.84,
   cameraShake: 0.78,
   motionEffects: true,
@@ -49,6 +49,13 @@ export function graphicsPixelRatioCap(quality: GraphicsQuality): number {
     case "cinematic":
       return 2.25;
   }
+}
+
+export function effectiveGraphicsPixelRatio(cap: number, devicePixelRatio = currentDevicePixelRatio()): number {
+  const safeCap = Number.isFinite(cap) && cap > 0 ? cap : 1;
+  const safeDevicePixelRatio =
+    Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  return Math.min(safeDevicePixelRatio, safeCap);
 }
 
 export function sanitizeGameSettings(value: unknown): GameSettings {
@@ -101,6 +108,13 @@ function getDefaultStorage(): SettingsStorage | null {
   } catch {
     return null;
   }
+}
+
+function currentDevicePixelRatio(): number {
+  if (typeof window === "undefined") {
+    return 1;
+  }
+  return window.devicePixelRatio || 1;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

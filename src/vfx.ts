@@ -112,6 +112,8 @@ const WARMUP_STREAK_CAPACITY = 128;
 const VFX_POOL_PARK_Y = -10000;
 const WARMUP_PROJECTILE_IDS: readonly ProjectileId[] = ["slug", "scatter", "pulse", "gravity", "ignite"];
 const WARMUP_MATERIAL_IDS: readonly MaterialId[] = ["glass", "metal", "concrete", "wood", "foam", "rubber"];
+const DEFAULT_DUST_COLOR = new THREE.Color(0xa49f94);
+const DEFAULT_CITY_DUST_COLOR = new THREE.Color(0x8d8880);
 const WARMUP_ROLES: readonly NonNullable<ExplosionFxContext["role"]>[] = ["primary", "secondary", "ignition"];
 const WARMUP_PROJECTILE_COLORS: Record<ProjectileId, THREE.ColorRepresentation> = {
   slug: 0x9fb7c8,
@@ -143,6 +145,23 @@ export class ParticleSystem {
   private readonly flashOverlay: HTMLDivElement;
   private quality: GraphicsQuality = "balanced";
   private flashScale = 1;
+  private readonly burstBaseColor = new THREE.Color();
+  private readonly burstColorJitter = new THREE.Color();
+  private readonly explosionCoreOrigin = new THREE.Vector3();
+  private readonly fxScratchOrigin = new THREE.Vector3();
+  private readonly smokeOffset = new THREE.Vector3();
+  private readonly smokeDrift = new THREE.Vector3();
+  private readonly directionForward = new THREE.Vector3();
+  private readonly directionSide = new THREE.Vector3();
+  private readonly directionUp = new THREE.Vector3();
+  private readonly blastDirection = new THREE.Vector3();
+  private readonly signatureDirection = new THREE.Vector3();
+  private readonly signatureLiftedDirection = new THREE.Vector3();
+  private readonly responseDirection = new THREE.Vector3();
+  private readonly explosionDustColor = new THREE.Color();
+  private readonly explosionSmokeColor = new THREE.Color();
+  private readonly cityDustColor = new THREE.Color();
+  private readonly cityFacadeColor = new THREE.Color();
 
   constructor(private readonly scene: THREE.Scene) {
     radialTexture(CORE_TEXTURE);
@@ -360,9 +379,9 @@ export class ParticleSystem {
     const profile = explosionProfile(context.projectileId, context.hitMaterialId);
     const impactScale = this.explosionScale(context);
     const visualRadius = radius * THREE.MathUtils.clamp(0.95 + impactScale * 0.08 + profile.shockBias * 0.08, 0.9, 1.28);
-    const coreOrigin = origin.clone().add(new THREE.Vector3(0, 0.35 + Math.min(0.85, radius * 0.06), 0));
-    const dustColor = averageColor(dustColors, new THREE.Color(0xa49f94));
-    const smokeColor = new THREE.Color(profile.smokeColor).lerp(dustColor, 0.28);
+    const coreOrigin = this.explosionCoreOrigin.set(origin.x, origin.y + 0.35 + Math.min(0.85, radius * 0.06), origin.z);
+    const dustColor = averageColorInto(this.explosionDustColor, dustColors, DEFAULT_DUST_COLOR);
+    const smokeColor = this.explosionSmokeColor.set(profile.smokeColor).lerp(dustColor, 0.28);
 
     this.flashLight.position.copy(origin);
     this.flashLight.color.set(profile.coreColor);
@@ -371,7 +390,7 @@ export class ParticleSystem {
     this.setFlashOverlay(profile, impactScale);
 
     this.spawnSprite(coreOrigin, CORE_TEXTURE, profile.coreColor, visualRadius * 0.34, visualRadius * 1.15, 0.74, 0.34, 0.42, THREE.AdditiveBlending);
-    this.spawnSprite(coreOrigin.clone().add(new THREE.Vector3(0, 0.16, 0)), CORE_TEXTURE, profile.edgeColor, visualRadius * 0.16, visualRadius * 0.9, 0.34, 0.42, 0.16, THREE.AdditiveBlending);
+    this.spawnSprite(this.offsetOrigin(coreOrigin, 0, 0.16, 0), CORE_TEXTURE, profile.edgeColor, visualRadius * 0.16, visualRadius * 0.9, 0.34, 0.42, 0.16, THREE.AdditiveBlending);
 
     const fireAmount = impactScale * (0.75 + profile.fireBias);
     const smokeAmount = impactScale * (0.8 + profile.smokeBias);
@@ -382,7 +401,7 @@ export class ParticleSystem {
     this.spawnBurst(origin, Math.round(92 * smokeAmount), dustColor, 1.38, 0.075, 4.6 * impactScale, 1.55, 0.32);
     this.spawnBurst(coreOrigin, Math.round(64 * smokeAmount), smokeColor, 2.25, 0.13, 2.5 * impactScale, 1.05, 0.55);
     this.spawnPressureWave(origin, visualRadius, profile.shockColor, context.role === "primary" ? 0.5 : 0.34, impactScale);
-    this.spawnDirectionalBlast(origin, normalizedImpactDirection(context.impactDirection), visualRadius, profile, dustColor, impactScale);
+    this.spawnDirectionalBlast(origin, normalizedImpactDirectionInto(this.responseDirection, context.impactDirection), visualRadius, profile, dustColor, impactScale);
     this.spawnStreaks(origin, visualRadius, profile.streakColor, Math.round(14 * streakAmount), 0.52);
     this.spawnSmokePuffs(coreOrigin, visualRadius, smokeColor, smokeAmount);
 
@@ -396,11 +415,11 @@ export class ParticleSystem {
 
   cityDebrisSpray(origin: THREE.Vector3, dustColors: THREE.Color[], intensity = 1): void {
     const amount = THREE.MathUtils.clamp(intensity, 0.35, 2.35);
-    const baseDust = averageColor(dustColors, new THREE.Color(0x8d8880));
-    const facadeColor = baseDust.clone().offsetHSL(0, -0.08, 0.08);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.35, 0)), Math.round(54 * amount), facadeColor, 1.1, 0.052, 7.5, 1.25, 0.22);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.55, 0)), Math.round(28 * amount), 0xd8fbff, 0.72, 0.03, 12, 0.72, 0.08, THREE.AdditiveBlending);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.2, 0)), Math.round(42 * amount), 0x25282b, 1.35, 0.07, 4.6, 1.65, 0.28);
+    const baseDust = averageColorInto(this.cityDustColor, dustColors, DEFAULT_CITY_DUST_COLOR);
+    const facadeColor = this.cityFacadeColor.copy(baseDust).offsetHSL(0, -0.08, 0.08);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.35, 0), Math.round(54 * amount), facadeColor, 1.1, 0.052, 7.5, 1.25, 0.22);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.55, 0), Math.round(28 * amount), 0xd8fbff, 0.72, 0.03, 12, 0.72, 0.08, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.2, 0), Math.round(42 * amount), 0x25282b, 1.35, 0.07, 4.6, 1.65, 0.28);
   }
 
   muzzleFlash(origin: THREE.Vector3, color: THREE.ColorRepresentation): void {
@@ -408,7 +427,7 @@ export class ParticleSystem {
     this.flashLight.color.set(color);
     this.flashLight.intensity = 32 * this.flashScale;
     this.flashOverlay.style.opacity = String(0.16 * this.flashScale);
-    this.spawnSprite(origin.clone().add(new THREE.Vector3(0, 0.05, 0)), CORE_TEXTURE, color, 0.28, 1.55, 0.72, 0.18, 0.12, THREE.AdditiveBlending);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.05, 0), CORE_TEXTURE, color, 0.28, 1.55, 0.72, 0.18, 0.12, THREE.AdditiveBlending);
     this.spawnBurst(origin, 68, color, 0.46, 0.065, 13, 0.45, 0.04, THREE.AdditiveBlending);
     this.spawnBurst(origin, 42, 0x707780, 0.9, 0.09, 5.5, 0.7, 0.24);
   }
@@ -416,27 +435,27 @@ export class ParticleSystem {
   ruptureDebrisSplash(origin: THREE.Vector3, intensity = 1, color: THREE.ColorRepresentation = 0xc08a4a): void {
     const count = Math.round(80 * intensity);
     this.spawnBurst(origin, count, color, 1.65, 0.085, 7.5 * intensity, 1.5, 0.32);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.18, 0)), Math.round(35 * intensity), 0xffc36a, 0.85, 0.045, 5, 0.7, 0.16, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.18, 0), Math.round(35 * intensity), 0xffc36a, 0.85, 0.045, 5, 0.7, 0.16, THREE.AdditiveBlending);
   }
 
   fireBurst(origin: THREE.Vector3, intensity = 1): void {
     const amount = THREE.MathUtils.clamp(intensity, 0.35, 2.2);
-    this.spawnSprite(origin.clone().add(new THREE.Vector3(0, 0.45, 0)), CORE_TEXTURE, 0xff8f38, 0.38 * amount, 1.5 * amount, 0.5, 0.32, 0.38, THREE.AdditiveBlending);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.28, 0)), Math.round(48 * amount), 0xff7a35, 0.62, 0.075, 6.8 * amount, 0.28, 0.14, THREE.AdditiveBlending);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.48, 0)), Math.round(30 * amount), 0xffd15c, 0.42, 0.045, 5.2 * amount, 0.2, 0.08, THREE.AdditiveBlending);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.32, 0)), Math.round(34 * amount), 0x1d1b19, 1.45, 0.12, 2.2 * amount, -0.18, 0.48);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.45, 0), CORE_TEXTURE, 0xff8f38, 0.38 * amount, 1.5 * amount, 0.5, 0.32, 0.38, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.28, 0), Math.round(48 * amount), 0xff7a35, 0.62, 0.075, 6.8 * amount, 0.28, 0.14, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.48, 0), Math.round(30 * amount), 0xffd15c, 0.42, 0.045, 5.2 * amount, 0.2, 0.08, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.32, 0), Math.round(34 * amount), 0x1d1b19, 1.45, 0.12, 2.2 * amount, -0.18, 0.48);
   }
 
   fireLick(origin: THREE.Vector3, intensity = 1): void {
     const amount = THREE.MathUtils.clamp(intensity, 0.25, 1.4);
-    this.spawnSprite(origin.clone().add(new THREE.Vector3(0, 0.36, 0)), CORE_TEXTURE, 0xff7a35, 0.16 * amount, 0.72 * amount, 0.36, 0.24, 0.28, THREE.AdditiveBlending);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.34, 0)), Math.round(16 * amount), 0xff8f38, 0.36, 0.055, 3.8 * amount, 0.15, 0.12, THREE.AdditiveBlending);
-    this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.48, 0)), Math.round(10 * amount), 0x2d2824, 0.95, 0.1, 1.5 * amount, -0.12, 0.44);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.36, 0), CORE_TEXTURE, 0xff7a35, 0.16 * amount, 0.72 * amount, 0.36, 0.24, 0.28, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.34, 0), Math.round(16 * amount), 0xff8f38, 0.36, 0.055, 3.8 * amount, 0.15, 0.12, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.48, 0), Math.round(10 * amount), 0x2d2824, 0.95, 0.1, 1.5 * amount, -0.12, 0.44);
   }
 
   armingPulse(origin: THREE.Vector3, intensity = 1, color: THREE.ColorRepresentation = 0xff9a42): void {
     const amount = THREE.MathUtils.clamp(intensity, 0.1, 1.25);
-    const lifted = origin.clone().add(new THREE.Vector3(0, 0.26, 0));
+    const lifted = this.offsetOrigin(origin, 0, 0.26, 0);
     this.spawnSprite(lifted, CORE_TEXTURE, color, 0.18 * amount, 0.78 * amount, 0.28 * amount, 0.22, 0.08, THREE.AdditiveBlending, 1.25);
     if (amount > 0.55) {
       this.spawnArcWeb(origin, 0.58 * amount, color, Math.round(4 + amount * 7), 0.24);
@@ -558,7 +577,7 @@ export class ParticleSystem {
     fx.rise = rise;
     fx.velocity.copy(velocity ?? ZERO_VECTOR);
     fx.rotationSpeed = THREE.MathUtils.randFloat(-1.8, 1.8);
-    this.scene.add(fx.sprite);
+    addToSceneIfNeeded(this.scene, fx.sprite);
     this.sprites.push(fx);
     perfMonitor.addCount("vfx.spritesSpawned");
     this.trimSprites();
@@ -574,15 +593,17 @@ export class ParticleSystem {
     for (let i = 0; i < puffCount; i += 1) {
       const angle = (i / puffCount) * Math.PI * 2 + Math.random() * 0.6;
       const distance = THREE.MathUtils.randFloat(radius * 0.06, radius * 0.28);
-      const offset = new THREE.Vector3(Math.cos(angle) * distance, THREE.MathUtils.randFloat(0.05, radius * 0.12), Math.sin(angle) * distance);
+      const angleCos = Math.cos(angle);
+      const angleSin = Math.sin(angle);
+      const offset = this.smokeOffset.set(angleCos * distance, THREE.MathUtils.randFloat(0.05, radius * 0.12), angleSin * distance);
       const startSize = THREE.MathUtils.randFloat(radius * 0.18, radius * 0.34);
-      const drift = new THREE.Vector3(
-        Math.cos(angle) * THREE.MathUtils.randFloat(0.08, 0.22),
+      const drift = this.smokeDrift.set(
+        angleCos * THREE.MathUtils.randFloat(0.08, 0.22),
         THREE.MathUtils.randFloat(0.02, 0.08),
-        Math.sin(angle) * THREE.MathUtils.randFloat(0.08, 0.22)
+        angleSin * THREE.MathUtils.randFloat(0.08, 0.22)
       );
       this.spawnSprite(
-        origin.clone().add(offset),
+        this.offsetOrigin(origin, offset.x, offset.y, offset.z),
         SMOKE_TEXTURE,
         color,
         startSize,
@@ -600,15 +621,17 @@ export class ParticleSystem {
     for (let i = 0; i < lingerCount; i += 1) {
       const angle = (i / lingerCount) * Math.PI * 2 + THREE.MathUtils.randFloatSpread(0.72);
       const distance = THREE.MathUtils.randFloat(radius * 0.04, radius * 0.2);
-      const offset = new THREE.Vector3(Math.cos(angle) * distance, THREE.MathUtils.randFloat(radius * 0.05, radius * 0.18), Math.sin(angle) * distance);
+      const angleCos = Math.cos(angle);
+      const angleSin = Math.sin(angle);
+      const offset = this.smokeOffset.set(angleCos * distance, THREE.MathUtils.randFloat(radius * 0.05, radius * 0.18), angleSin * distance);
       const startSize = THREE.MathUtils.randFloat(radius * 0.22, radius * 0.42);
-      const drift = new THREE.Vector3(
-        Math.cos(angle) * THREE.MathUtils.randFloat(0.04, 0.15),
+      const drift = this.smokeDrift.set(
+        angleCos * THREE.MathUtils.randFloat(0.04, 0.15),
         THREE.MathUtils.randFloat(0.04, 0.14),
-        Math.sin(angle) * THREE.MathUtils.randFloat(0.04, 0.15)
+        angleSin * THREE.MathUtils.randFloat(0.04, 0.15)
       );
       this.spawnSprite(
-        origin.clone().add(offset),
+        this.offsetOrigin(origin, offset.x, offset.y, offset.z),
         SMOKE_TEXTURE,
         color,
         startSize,
@@ -646,7 +669,7 @@ export class ParticleSystem {
     wave.startRadius = radius * 0.16;
     wave.endRadius = radius * THREE.MathUtils.randFloat(1.15, 1.65);
     wave.maxOpacity = maxOpacity;
-    this.scene.add(wave.mesh);
+    addToSceneIfNeeded(this.scene, wave.mesh);
     this.pressureWaves.push(wave);
     perfMonitor.addCount("vfx.pressureWavesSpawned");
     this.trimPressureWaves();
@@ -660,7 +683,9 @@ export class ParticleSystem {
     dustColor: THREE.Color,
     impactScale: number
   ): void {
-    const blastDirection = direction.clone().add(new THREE.Vector3(0, 0.16, 0)).normalize();
+    const blastDirection = this.blastDirection.copy(direction);
+    blastDirection.y += 0.16;
+    blastDirection.normalize();
     this.spawnDirectionalBurst(origin, blastDirection, Math.round(52 * impactScale), profile.hotColor, 0.58, 0.034, 26 * impactScale, 0.52, 0.035, 0.44, THREE.AdditiveBlending);
     this.spawnDirectionalBurst(origin, blastDirection, Math.round(48 * impactScale), dustColor, 1.25, 0.09, 8.5 * impactScale, 1.55, 0.25, 0.62);
     this.spawnDirectionalStreaks(origin, blastDirection, radius * 1.22, profile.streakColor, Math.round(10 * impactScale), 0.42, 0.24);
@@ -704,14 +729,17 @@ export class ParticleSystem {
     context: ExplosionFxContext,
     impactScale: number
   ): void {
-    const direction = normalizedImpactDirection(context.impactDirection);
+    const direction = normalizedImpactDirectionInto(this.signatureDirection, context.impactDirection);
     switch (context.projectileId) {
       case "slug":
         this.spawnDirectionalStreaks(origin, direction, visualRadius * 1.22, 0xd8f1ff, Math.round(16 * impactScale), 0.34, 0.18);
         this.spawnSprite(coreOrigin, CORE_TEXTURE, 0xd8f1ff, visualRadius * 0.18, visualRadius * 1.15, 0.28, 0.28, 0.18, THREE.AdditiveBlending, 0.38);
         break;
       case "scatter":
-        this.spawnDirectionalStreaks(origin, direction.clone().add(new THREE.Vector3(0, 0.2, 0)).normalize(), visualRadius * 1.16, 0xffdd8a, Math.round(18 * impactScale), 0.36, 0.62);
+        this.signatureLiftedDirection.copy(direction);
+        this.signatureLiftedDirection.y += 0.2;
+        this.signatureLiftedDirection.normalize();
+        this.spawnDirectionalStreaks(origin, this.signatureLiftedDirection, visualRadius * 1.16, 0xffdd8a, Math.round(18 * impactScale), 0.36, 0.62);
         this.spawnBurst(origin, Math.round(46 * impactScale), 0xffd26b, 0.46, 0.028, 34 * impactScale, 0.62, 0.03, THREE.AdditiveBlending);
         break;
       case "pulse":
@@ -721,10 +749,10 @@ export class ParticleSystem {
       case "gravity":
         this.spawnArcWeb(origin, visualRadius * 0.88, 0x8d6cff, Math.round(16 * impactScale), 0.62);
         this.spawnSprite(coreOrigin, SMOKE_TEXTURE, 0x251a35, visualRadius * 0.48, visualRadius * 1.82, 0.36, 0.82, -0.1, THREE.NormalBlending, 1.18);
-        this.spawnBurst(origin.clone().add(new THREE.Vector3(0, -0.05, 0)), Math.round(62 * impactScale), 0x2a143d, 1.05, 0.06, 13 * impactScale, -0.35, 0.12, THREE.AdditiveBlending);
+        this.spawnBurst(this.offsetOrigin(origin, 0, -0.05, 0), Math.round(62 * impactScale), 0x2a143d, 1.05, 0.06, 13 * impactScale, -0.35, 0.12, THREE.AdditiveBlending);
         break;
       case "ignite":
-        this.spawnSprite(coreOrigin.clone().add(new THREE.Vector3(0, 0.18, 0)), CORE_TEXTURE, 0xff7a35, visualRadius * 0.22, visualRadius * 1.75, 0.38, 0.54, 0.64, THREE.AdditiveBlending, 0.52);
+        this.spawnSprite(this.offsetOrigin(coreOrigin, 0, 0.18, 0), CORE_TEXTURE, 0xff7a35, visualRadius * 0.22, visualRadius * 1.75, 0.38, 0.54, 0.64, THREE.AdditiveBlending, 0.52);
         this.spawnBurst(coreOrigin, Math.round(50 * impactScale), 0xffd25c, 0.72, 0.033, 18 * impactScale, 0.14, 0.04, THREE.AdditiveBlending);
         break;
       case undefined:
@@ -740,21 +768,22 @@ export class ParticleSystem {
     dustColor: THREE.Color,
     impactScale: number
   ): void {
+    const responseDirection = normalizedImpactDirectionInto(this.responseDirection, context.impactDirection);
     for (const materialId of dominantMaterials(context.result, context.hitMaterialId).slice(0, this.materialResponseBudget())) {
       switch (materialId) {
         case "glass":
-          this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.18, 0)), Math.round(46 * impactScale), 0xd8fbff, 0.64, 0.024, 22 * impactScale, 0.28, 0.04, THREE.AdditiveBlending);
+          this.spawnBurst(this.offsetOrigin(origin, 0, 0.18, 0), Math.round(46 * impactScale), 0xd8fbff, 0.64, 0.024, 22 * impactScale, 0.28, 0.04, THREE.AdditiveBlending);
           this.spawnArcWeb(origin, visualRadius * 0.52, 0xb9fbff, Math.round(8 * impactScale), 0.42);
           break;
         case "metal":
-          this.spawnDirectionalStreaks(origin, normalizedImpactDirection(context.impactDirection), visualRadius * 0.8, 0xfff0a8, Math.round(10 * impactScale), 0.36, 0.34);
+          this.spawnDirectionalStreaks(origin, responseDirection, visualRadius * 0.8, 0xfff0a8, Math.round(10 * impactScale), 0.36, 0.34);
           this.spawnBurst(origin, Math.round(32 * impactScale), 0xffd25c, 0.42, 0.022, 28 * impactScale, 0.5, 0.03, THREE.AdditiveBlending);
           break;
         case "concrete":
-          this.spawnBurst(origin.clone().add(new THREE.Vector3(0, 0.08, 0)), Math.round(58 * impactScale), dustColor, 1.55, 0.09, 5.2 * impactScale, 1.75, 0.34);
+          this.spawnBurst(this.offsetOrigin(origin, 0, 0.08, 0), Math.round(58 * impactScale), dustColor, 1.55, 0.09, 5.2 * impactScale, 1.75, 0.34);
           break;
         case "wood":
-          this.spawnDirectionalStreaks(origin, normalizedImpactDirection(context.impactDirection), visualRadius * 0.62, 0xffb36a, Math.round(9 * impactScale), 0.48, 0.5);
+          this.spawnDirectionalStreaks(origin, responseDirection, visualRadius * 0.62, 0xffb36a, Math.round(9 * impactScale), 0.48, 0.5);
           this.spawnBurst(origin, Math.round(34 * impactScale), 0xc08a4a, 0.9, 0.055, 10 * impactScale, 0.82, 0.16);
           break;
         case "foam":
@@ -784,27 +813,27 @@ export class ParticleSystem {
       return;
     }
     const scaledCount = Math.max(1, Math.round(count * this.qualityDensity()));
-    const forward = normalizedImpactDirection(direction);
-    const side = new THREE.Vector3(-forward.z, 0, forward.x);
+    const forward = normalizedImpactDirectionInto(this.directionForward, direction);
+    const side = this.directionSide.set(-forward.z, 0, forward.x);
     if (side.lengthSq() < 0.0001) {
       side.set(1, 0, 0);
     }
     side.normalize();
-    const up = new THREE.Vector3().crossVectors(side, forward).normalize();
+    const up = this.directionUp.crossVectors(side, forward).normalize();
     const streak = this.acquireStreak(scaledCount, color, 1);
     const positions = streak.positions;
     for (let i = 0; i < scaledCount; i += 1) {
-      const sideJitter = side.clone().multiplyScalar(THREE.MathUtils.randFloatSpread(radius * spread));
-      const upJitter = up.clone().multiplyScalar(THREE.MathUtils.randFloatSpread(radius * spread * 0.72));
-      const start = forward.clone().multiplyScalar(THREE.MathUtils.randFloat(0.04, radius * 0.12)).add(sideJitter.clone().multiplyScalar(0.16)).add(upJitter.clone().multiplyScalar(0.16));
-      const end = forward.clone().multiplyScalar(THREE.MathUtils.randFloat(radius * 0.34, radius * 1.16)).add(sideJitter).add(upJitter);
+      const sideJitter = THREE.MathUtils.randFloatSpread(radius * spread);
+      const upJitter = THREE.MathUtils.randFloatSpread(radius * spread * 0.72);
+      const startForward = THREE.MathUtils.randFloat(0.04, radius * 0.12);
+      const endForward = THREE.MathUtils.randFloat(radius * 0.34, radius * 1.16);
       const base = i * 6;
-      positions[base] = start.x;
-      positions[base + 1] = start.y;
-      positions[base + 2] = start.z;
-      positions[base + 3] = end.x;
-      positions[base + 4] = end.y;
-      positions[base + 5] = end.z;
+      positions[base] = forward.x * startForward + side.x * sideJitter * 0.16 + up.x * upJitter * 0.16;
+      positions[base + 1] = forward.y * startForward + side.y * sideJitter * 0.16 + up.y * upJitter * 0.16;
+      positions[base + 2] = forward.z * startForward + side.z * sideJitter * 0.16 + up.z * upJitter * 0.16;
+      positions[base + 3] = forward.x * endForward + side.x * sideJitter + up.x * upJitter;
+      positions[base + 4] = forward.y * endForward + side.y * sideJitter + up.y * upJitter;
+      positions[base + 5] = forward.z * endForward + side.z * sideJitter + up.z * upJitter;
     }
     this.activateStreak(streak, origin, scaledCount, maxLife, THREE.MathUtils.randFloat(0.08, 0.28), 1);
     perfMonitor.addCount("vfx.streaksSpawned");
@@ -853,40 +882,37 @@ export class ParticleSystem {
     blending: THREE.Blending = THREE.NormalBlending
   ): void {
     const scaledCount = Math.max(1, Math.round(count * this.qualityDensity()));
-    const { forward, side, up } = directionBasis(direction);
+    writeDirectionBasis(direction, this.directionForward, this.directionSide, this.directionUp);
+    const forward = this.directionForward;
+    const side = this.directionSide;
+    const up = this.directionUp;
     const burst = this.acquireBurst(scaledCount, size, blending);
     const positions = burst.positions;
     const colors = burst.colors;
     const velocities = burst.velocities;
-    const baseColor = new THREE.Color(color);
-    const colorJitter = new THREE.Color();
+    const baseColor = this.burstBaseColor.set(color);
+    const colorJitter = this.burstColorJitter;
 
     for (let i = 0; i < scaledCount; i += 1) {
       const sideScale = THREE.MathUtils.randFloatSpread(spread);
       const upScale = THREE.MathUtils.randFloatSpread(spread * 0.72);
       const velocityScale = speed * THREE.MathUtils.randFloat(0.42, 1.08);
-      const velocity = forward
-        .clone()
-        .multiplyScalar(velocityScale)
-        .add(side.clone().multiplyScalar(sideScale * speed))
-        .add(up.clone().multiplyScalar((0.12 + upScale) * speed));
-      velocities[i * 3] = velocity.x;
-      velocities[i * 3 + 1] = velocity.y;
-      velocities[i * 3 + 2] = velocity.z;
+      const velocitySide = sideScale * speed;
+      const velocityUp = (0.12 + upScale) * speed;
+      const base = i * 3;
+      velocities[base] = forward.x * velocityScale + side.x * velocitySide + up.x * velocityUp;
+      velocities[base + 1] = forward.y * velocityScale + side.y * velocitySide + up.y * velocityUp;
+      velocities[base + 2] = forward.z * velocityScale + side.z * velocitySide + up.z * velocityUp;
 
-      const startOffset = forward
-        .clone()
-        .multiplyScalar(THREE.MathUtils.randFloat(-0.08, 0.18))
-        .add(side.clone().multiplyScalar(sideScale * 0.18))
-        .add(up.clone().multiplyScalar(upScale * 0.12));
-      positions[i * 3] = origin.x + startOffset.x;
-      positions[i * 3 + 1] = origin.y + startOffset.y;
-      positions[i * 3 + 2] = origin.z + startOffset.z;
+      const startForward = THREE.MathUtils.randFloat(-0.08, 0.18);
+      positions[base] = origin.x + forward.x * startForward + side.x * sideScale * 0.18 + up.x * upScale * 0.12;
+      positions[base + 1] = origin.y + forward.y * startForward + side.y * sideScale * 0.18 + up.y * upScale * 0.12;
+      positions[base + 2] = origin.z + forward.z * startForward + side.z * sideScale * 0.18 + up.z * upScale * 0.12;
 
       colorJitter.copy(baseColor).offsetHSL((Math.random() - 0.5) * 0.035, 0, (Math.random() - 0.5) * 0.14);
-      colors[i * 3] = colorJitter.r;
-      colors[i * 3 + 1] = colorJitter.g;
-      colors[i * 3 + 2] = colorJitter.b;
+      colors[base] = colorJitter.r;
+      colors[base + 1] = colorJitter.g;
+      colors[base + 2] = colorJitter.b;
     }
 
     this.activateBurst(burst, scaledCount, maxLife, gravity, drag);
@@ -915,8 +941,8 @@ export class ParticleSystem {
     const positions = burst.positions;
     const colors = burst.colors;
     const velocities = burst.velocities;
-    const baseColor = new THREE.Color(color);
-    const colorJitter = new THREE.Color();
+    const baseColor = this.burstBaseColor.set(color);
+    const colorJitter = this.burstColorJitter;
 
     for (let i = 0; i < scaledCount; i += 1) {
       const directionX = Math.random() - 0.5;
@@ -947,7 +973,7 @@ export class ParticleSystem {
   private acquireBurst(count: number, size: number, blending: THREE.Blending): ParticleBurst {
     const warmedSize = nearestWarmupBurstSize(size);
     const poolIndex = this.findBurstPoolIndex(count, warmedSize, blending);
-    const burst = poolIndex >= 0 ? this.burstPool.splice(poolIndex, 1)[0] : this.createBurst(pooledCapacity(count, 32), blending);
+    const burst = poolIndex >= 0 ? takeUnordered(this.burstPool, poolIndex) : this.createBurst(pooledCapacity(count, 32), blending);
     if (poolIndex >= 0) {
       perfMonitor.addCount("vfx.burstPoolReuse");
     } else {
@@ -1014,7 +1040,7 @@ export class ParticleSystem {
     burst.colorAttribute.needsUpdate = true;
     burst.points.position.set(0, 0, 0);
     burst.points.visible = true;
-    this.scene.add(burst.points);
+    addToSceneIfNeeded(this.scene, burst.points);
     this.bursts.push(burst);
   }
 
@@ -1043,7 +1069,7 @@ export class ParticleSystem {
   private acquireSprite(textureKind: string, blending: THREE.Blending): FxSprite {
     const poolIndex = this.findSpritePoolIndex(textureKind, blending);
     if (poolIndex >= 0) {
-      const sprite = this.spritePool.splice(poolIndex, 1)[0];
+      const sprite = takeUnordered(this.spritePool, poolIndex);
       perfMonitor.addCount("vfx.spritePoolReuse");
       return sprite;
     }
@@ -1082,7 +1108,7 @@ export class ParticleSystem {
 
   private acquireStreak(count: number, color: THREE.ColorRepresentation, opacity: number): StreakBurst {
     const poolIndex = this.findStreakPoolIndex(count);
-    const streak = poolIndex >= 0 ? this.streakPool.splice(poolIndex, 1)[0] : this.createStreak(pooledCapacity(count, 8));
+    const streak = poolIndex >= 0 ? takeUnordered(this.streakPool, poolIndex) : this.createStreak(pooledCapacity(count, 8));
     if (poolIndex >= 0) {
       perfMonitor.addCount("vfx.streakPoolReuse");
     } else {
@@ -1134,7 +1160,7 @@ export class ParticleSystem {
     streak.positionAttribute.needsUpdate = true;
     streak.lines.position.copy(origin);
     streak.lines.scale.setScalar(1);
-    this.scene.add(streak.lines);
+    addToSceneIfNeeded(this.scene, streak.lines);
     this.streaks.push(streak);
   }
 
@@ -1186,28 +1212,28 @@ export class ParticleSystem {
   }
 
   private retireBurstAt(index: number): void {
-    const [burst] = this.bursts.splice(index, 1);
+    const burst = takeUnordered(this.bursts, index);
     if (burst) {
       this.releaseBurst(burst);
     }
   }
 
   private retireSpriteAt(index: number): void {
-    const [sprite] = this.sprites.splice(index, 1);
+    const sprite = takeUnordered(this.sprites, index);
     if (sprite) {
       this.releaseSprite(sprite);
     }
   }
 
   private retireStreakAt(index: number): void {
-    const [streak] = this.streaks.splice(index, 1);
+    const streak = takeUnordered(this.streaks, index);
     if (streak) {
       this.releaseStreak(streak);
     }
   }
 
   private retirePressureWaveAt(index: number): void {
-    const [wave] = this.pressureWaves.splice(index, 1);
+    const wave = takeUnordered(this.pressureWaves, index);
     if (wave) {
       this.releasePressureWave(wave);
     }
@@ -1287,11 +1313,11 @@ export class ParticleSystem {
       burst.positionAttribute.needsUpdate = true;
       burst.colorAttribute.needsUpdate = true;
     }
-    burst.geometry.setDrawRange(0, Math.min(WARMUP_BURST_CAPACITY, burst.capacity));
+    burst.geometry.setDrawRange(0, burst.capacity > 0 ? 1 : 0);
     burst.points.visible = true;
     burst.points.frustumCulled = false;
     burst.points.position.set(0, VFX_POOL_PARK_Y, 0);
-    this.scene.add(burst.points);
+    addToSceneIfNeeded(this.scene, burst.points);
   }
 
   private parkSpriteForPipeline(sprite: FxSprite): void {
@@ -1302,7 +1328,7 @@ export class ParticleSystem {
     sprite.sprite.frustumCulled = false;
     sprite.sprite.position.set(0, VFX_POOL_PARK_Y, 0);
     sprite.sprite.scale.set(0.05, 0.05, 1);
-    this.scene.add(sprite.sprite);
+    addToSceneIfNeeded(this.scene, sprite.sprite);
   }
 
   private parkStreakForPipeline(streak: StreakBurst): void {
@@ -1318,12 +1344,12 @@ export class ParticleSystem {
       streak.positions[5] = 0;
       streak.positionAttribute.needsUpdate = true;
     }
-    streak.geometry.setDrawRange(0, Math.min(WARMUP_STREAK_CAPACITY * 2, streak.capacity * 2));
+    streak.geometry.setDrawRange(0, streak.capacity > 0 ? 2 : 0);
     streak.lines.visible = true;
     streak.lines.frustumCulled = false;
     streak.lines.position.set(0, VFX_POOL_PARK_Y, 0);
     streak.lines.scale.setScalar(1);
-    this.scene.add(streak.lines);
+    addToSceneIfNeeded(this.scene, streak.lines);
   }
 
   private parkPressureWaveForPipeline(wave: PressureWave): void {
@@ -1333,46 +1359,30 @@ export class ParticleSystem {
     wave.mesh.frustumCulled = false;
     wave.mesh.position.set(0, VFX_POOL_PARK_Y, 0);
     wave.mesh.scale.set(0.05, 0.05, 1);
-    this.scene.add(wave.mesh);
+    addToSceneIfNeeded(this.scene, wave.mesh);
   }
 
   private trimBursts(): void {
     while (this.bursts.length > ParticleSystem.maxBursts) {
-      const burst = this.bursts.shift();
-      if (!burst) {
-        return;
-      }
-      this.releaseBurst(burst);
+      this.retireBurstAt(0);
     }
   }
 
   private trimSprites(): void {
     while (this.sprites.length > ParticleSystem.maxSprites) {
-      const sprite = this.sprites.shift();
-      if (!sprite) {
-        return;
-      }
-      this.releaseSprite(sprite);
+      this.retireSpriteAt(0);
     }
   }
 
   private trimStreaks(): void {
     while (this.streaks.length > ParticleSystem.maxStreaks) {
-      const streak = this.streaks.shift();
-      if (!streak) {
-        return;
-      }
-      this.releaseStreak(streak);
+      this.retireStreakAt(0);
     }
   }
 
   private trimPressureWaves(): void {
     while (this.pressureWaves.length > ParticleSystem.maxPressureWaves) {
-      const wave = this.pressureWaves.shift();
-      if (!wave) {
-        return;
-      }
-      this.releasePressureWave(wave);
+      this.retirePressureWaveAt(0);
     }
   }
 
@@ -1440,6 +1450,10 @@ export class ParticleSystem {
         return 1.15;
     }
   }
+
+  private offsetOrigin(origin: THREE.Vector3, x: number, y: number, z: number): THREE.Vector3 {
+    return this.fxScratchOrigin.set(origin.x + x, origin.y + y, origin.z + z);
+  }
 }
 
 export class ExplosionSystem {
@@ -1450,21 +1464,21 @@ export class ExplosionSystem {
   }
 }
 
-function normalizedImpactDirection(direction?: THREE.Vector3): THREE.Vector3 {
+function normalizedImpactDirectionInto(target: THREE.Vector3, direction?: THREE.Vector3): THREE.Vector3 {
   if (!direction || direction.lengthSq() < 0.0001) {
-    return new THREE.Vector3(0, 0.08, -1).normalize();
+    return target.set(0, 0.08, -1).normalize();
   }
-  return direction.clone().normalize();
+  return target.copy(direction).normalize();
 }
 
-function directionBasis(direction: THREE.Vector3): { forward: THREE.Vector3; side: THREE.Vector3; up: THREE.Vector3 } {
-  const forward = normalizedImpactDirection(direction);
-  const side = new THREE.Vector3(-forward.z, 0, forward.x);
+function writeDirectionBasis(direction: THREE.Vector3, forward: THREE.Vector3, side: THREE.Vector3, up: THREE.Vector3): void {
+  normalizedImpactDirectionInto(forward, direction);
+  side.set(-forward.z, 0, forward.x);
   if (side.lengthSq() < 0.0001) {
     side.set(1, 0, 0);
   }
   side.normalize();
-  const up = new THREE.Vector3().crossVectors(side, forward);
+  up.crossVectors(side, forward);
   if (up.y < 0) {
     up.multiplyScalar(-1);
   }
@@ -1473,7 +1487,6 @@ function directionBasis(direction: THREE.Vector3): { forward: THREE.Vector3; sid
   } else {
     up.normalize();
   }
-  return { forward, side, up };
 }
 
 function pooledCapacity(count: number, bucketSize: number): number {
@@ -1536,18 +1549,18 @@ function dominantMaterials(result?: ExplosionResult, hitMaterialId?: MaterialId)
   return [...scores.entries()].sort((a, b) => b[1] - a[1]).map(([materialId]) => materialId);
 }
 
-function averageColor(colors: THREE.Color[], fallback: THREE.Color): THREE.Color {
+function averageColorInto(target: THREE.Color, colors: THREE.Color[], fallback: THREE.Color): THREE.Color {
   if (colors.length === 0) {
-    return fallback;
+    return target.copy(fallback);
   }
-  const color = new THREE.Color(0, 0, 0);
+  target.setRGB(0, 0, 0);
   for (const entry of colors) {
-    color.r += entry.r;
-    color.g += entry.g;
-    color.b += entry.b;
+    target.r += entry.r;
+    target.g += entry.g;
+    target.b += entry.b;
   }
-  color.multiplyScalar(1 / colors.length);
-  return color;
+  target.multiplyScalar(1 / colors.length);
+  return target;
 }
 
 function explosionProfile(projectileId?: ProjectileId, hitMaterialId?: MaterialId): ExplosionProfile {
@@ -1790,6 +1803,21 @@ function drawCoreTextureBreakup(context: CanvasRenderingContext2D): void {
 function colorToCss(color: THREE.ColorRepresentation, alpha: number): string {
   const parsed = new THREE.Color(color);
   return `rgba(${Math.round(parsed.r * 255)}, ${Math.round(parsed.g * 255)}, ${Math.round(parsed.b * 255)}, ${alpha})`;
+}
+
+function addToSceneIfNeeded(scene: THREE.Scene, object: THREE.Object3D): void {
+  if (object.parent !== scene) {
+    scene.add(object);
+  }
+}
+
+function takeUnordered<T>(items: T[], index: number): T {
+  const item = items[index];
+  const last = items.pop();
+  if (index < items.length && last !== undefined) {
+    items[index] = last;
+  }
+  return item;
 }
 
 function easeOutCubic(t: number): number {
