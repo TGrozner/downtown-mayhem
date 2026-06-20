@@ -2256,6 +2256,11 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
   const counterJibCenterX = -1.95;
   const counterweightX = -3.62;
   const hookX = 10.1;
+  const hookCenterY = topY - 2.25;
+  const hookSize = new THREE.Vector3(0.42, 0.22, 0.18);
+  const payloadSize = new THREE.Vector3(1.86, 1.08, 1.36);
+  const payloadLiftGap = 0.74;
+  const payloadCenterY = hookCenterY - hookSize.y * 0.5 - payloadLiftGap - payloadSize.y * 0.5;
 
   addCranePart(
     context,
@@ -2331,8 +2336,8 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
           offset: new THREE.Vector3(0.68, topY - 0.08 - boomCenterY, -0.48)
         },
         {
-          size: new THREE.Vector3(0.42, 0.22, 0.18),
-          offset: new THREE.Vector3(hookX, topY - 2.25 - boomCenterY, 0)
+          size: hookSize,
+          offset: new THREE.Vector3(hookX, hookCenterY - boomCenterY, 0)
         }
       ]
     }
@@ -2345,7 +2350,9 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
     counterJibLength,
     counterJibCenterX,
     counterweightX,
-    hookX
+    hookX,
+    hookCenterY,
+    hookSize
   });
 
   const payload = addCranePart(
@@ -2360,8 +2367,8 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
       emissiveIntensity: 0.1,
       map: materialAtlasTile(10)
     }),
-    new THREE.Vector3(anchor.x + hookX, topY - 2.92, anchor.z),
-    new THREE.Vector3(1.86, 1.08, 1.36),
+    new THREE.Vector3(anchor.x + hookX, payloadCenterY, anchor.z),
+    payloadSize,
     260,
     {
       supportGroupId,
@@ -2372,7 +2379,7 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
       supportReleaseMassScale: 4.8
     }
   );
-  decorateCranePayload(payload);
+  decorateCranePayload(payload, { size: payloadSize, liftGap: payloadLiftGap });
 }
 
 interface CranePartOptions {
@@ -2474,9 +2481,14 @@ function decorateCraneBoomAssembly(
     counterJibCenterX: number;
     counterweightX: number;
     hookX: number;
+    hookCenterY: number;
+    hookSize: THREE.Vector3;
   }
 ): void {
   const localY = (worldY: number) => worldY - config.boomCenterY;
+  const cableTopY = config.topY + 0.28;
+  const cableBottomY = config.hookCenterY + config.hookSize.y * 0.5 - 0.03;
+  const cableHeight = cableTopY - cableBottomY;
   addCraneVisualBox(
     mesh,
     "construction crane slewing deck",
@@ -2527,16 +2539,16 @@ function decorateCraneBoomAssembly(
   addCraneVisualBox(
     mesh,
     "construction crane hoist cable",
-    new THREE.Vector3(0.045, 2.45, 0.045),
+    new THREE.Vector3(0.045, cableHeight, 0.045),
     new THREE.MeshStandardMaterial({ color: 0x11171b, roughness: 0.62, metalness: 0.64, map: materialAtlasTile(6) }),
-    new THREE.Vector3(config.hookX, localY(config.topY - 0.95), 0)
+    new THREE.Vector3(config.hookX, localY((cableTopY + cableBottomY) * 0.5), 0)
   );
   addCraneVisualBox(
     mesh,
     "construction crane hook",
-    new THREE.Vector3(0.42, 0.22, 0.18),
+    config.hookSize,
     new THREE.MeshStandardMaterial({ color: 0x20282d, roughness: 0.48, metalness: 0.7, map: materialAtlasTile(10) }),
-    new THREE.Vector3(config.hookX, localY(config.topY - 2.25), 0)
+    new THREE.Vector3(config.hookX, localY(config.hookCenterY), 0)
   );
 }
 
@@ -2608,9 +2620,50 @@ function decorateCraneBoom(mesh: THREE.Mesh, length: number): void {
   }
 }
 
-function decorateCranePayload(mesh: THREE.Mesh): void {
+function decorateCranePayload(mesh: THREE.Mesh, config: { size: THREE.Vector3; liftGap: number }): void {
   const hazardMaterial = new THREE.MeshBasicMaterial({ color: 0xffb22e, transparent: true, opacity: 0.96 });
   const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xff4f38, transparent: true, opacity: 0.82 });
+  const riggingMaterial = new THREE.MeshStandardMaterial({ color: 0x10161a, roughness: 0.54, metalness: 0.72, map: materialAtlasTile(6) });
+  const liftBarMaterial = craneYellowMaterial();
+  const payloadTopY = config.size.y * 0.5;
+  const liftRingY = payloadTopY + config.liftGap;
+  const spreaderY = payloadTopY + 0.14;
+  const slingX = config.size.x * 0.34;
+  const slingZ = config.size.z * 0.34;
+
+  addCraneVisualBox(
+    mesh,
+    "crane payload spreader beam",
+    new THREE.Vector3(config.size.x * 0.92, 0.08, 0.12),
+    liftBarMaterial,
+    new THREE.Vector3(0, spreaderY, 0)
+  );
+
+  for (const [x, z] of [
+    [-slingX, -slingZ],
+    [-slingX, slingZ],
+    [slingX, -slingZ],
+    [slingX, slingZ]
+  ] as const) {
+    addCraneRiggingCable(
+      mesh,
+      "crane payload suspension sling",
+      new THREE.Vector3(x, spreaderY, z),
+      new THREE.Vector3(0, liftRingY, 0),
+      0.035,
+      riggingMaterial.clone()
+    );
+  }
+
+  addCraneRiggingCable(
+    mesh,
+    "crane payload hook pendant",
+    new THREE.Vector3(0, spreaderY + 0.02, 0),
+    new THREE.Vector3(0, liftRingY + 0.16, 0),
+    0.045,
+    riggingMaterial.clone()
+  );
+
   for (const z of [-0.56, 0.56]) {
     const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.08, 0.035), hazardMaterial.clone());
     stripe.name = "crane payload hazard stripe";
@@ -2625,6 +2678,31 @@ function decorateCranePayload(mesh: THREE.Mesh): void {
     latch.userData.disposeMaterial = true;
     mesh.add(latch);
   }
+}
+
+function addCraneRiggingCable(
+  parent: THREE.Mesh,
+  name: string,
+  from: THREE.Vector3,
+  to: THREE.Vector3,
+  thickness: number,
+  material: THREE.Material
+): void {
+  const delta = new THREE.Vector3().subVectors(to, from);
+  const length = delta.length();
+  if (length <= 0) {
+    material.dispose();
+    return;
+  }
+
+  const cable = new THREE.Mesh(new THREE.BoxGeometry(thickness, length, thickness), material);
+  cable.name = name;
+  cable.position.copy(from).addScaledVector(delta, 0.5);
+  cable.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
+  cable.castShadow = true;
+  cable.receiveShadow = true;
+  cable.userData.disposeMaterial = true;
+  parent.add(cable);
 }
 
 function decorateRadioTowerSegment(mesh: THREE.Mesh, level: number, height: number): void {
