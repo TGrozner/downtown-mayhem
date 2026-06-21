@@ -356,9 +356,7 @@ test("uses Space as game input after pointer-clicking Retry", async ({ page }) =
 
   const resetButton = page.locator("[data-action='reset']");
   await expect(resetButton).toBeVisible({ timeout: UI_READY_TIMEOUT_MS });
-  const resetBox = await resetButton.boundingBox();
-  expect(resetBox).not.toBeNull();
-  await page.mouse.click(resetBox!.x + resetBox!.width * 0.5, resetBox!.y + resetBox!.height * 0.5);
+  await resetButton.click({ timeout: UI_READY_TIMEOUT_MS });
   await expect
     .poll(() => page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getRenderWarmupState().phase), {
       timeout: LEVEL_START_TIMEOUT_MS
