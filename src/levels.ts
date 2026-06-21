@@ -1967,6 +1967,13 @@ function spawnCentralSkyneedle(context: LevelContext): void {
   const rotationY = -Math.PI * 0.055;
   const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rotationY, 0));
   const fallDirection = new THREE.Vector3(-0.58, 0, 0.82);
+  const skyneedleSupportRelease = {
+    supportGroupId,
+    supportReleaseRadius: 4.45,
+    supportReleaseHeight: 14.2,
+    supportReleaseLowerHeight: 13.8,
+    supportReleaseFallDirection: fallDirection
+  };
   const metalMaterial = context.materials.get("metal");
   const glassMaterial = context.materials.get("glass");
   const concreteMaterial = context.materials.get("concrete");
@@ -2003,13 +2010,11 @@ function spawnCentralSkyneedle(context: LevelContext): void {
     destructible: true,
     bodyType: "fixed",
     chainSource: true,
-    supportGroupId,
-    supportReleaseRadius: 4.2,
-    supportReleaseHeight: 13.8,
-    supportReleaseFallDirection: fallDirection,
+    ...skyneedleSupportRelease,
     supportReleaseImpulseScale: 1.05,
     supportReleaseTorqueScale: 1.08,
     supportReleaseMassScale: 1.35,
+    fractureResistance: 0.82,
     scoreValue: 760
   });
   decorateHazardIndicator(podium.mesh, { size: podium.dimensions, kind: "explosive" });
@@ -2033,21 +2038,19 @@ function spawnCentralSkyneedle(context: LevelContext): void {
       category: "structure",
       scoreRole: "target",
       zoneId,
-      canFracture: false,
+      canFracture: true,
       destructible: true,
       bodyType: "dynamic",
       chainSource: true,
-      supportGroupId,
-      supportReleaseRadius: 4.2,
-      supportReleaseHeight: 13.8,
-      supportReleaseFallDirection: fallDirection,
+      ...skyneedleSupportRelease,
       supportReleaseImpulseScale: 0.95,
       supportReleaseTorqueScale: 0.98,
       supportReleaseMassScale: 1.25,
+      fractureResistance: 0.92,
       sleeping: true,
       linearDamping: 0.74,
       angularDamping: 1.16,
-      additionalMass: size.x * size.y * size.z * 6.5,
+      additionalMass: size.x * size.y * size.z * 4.6,
       scoreValue: 520
     });
     decorateBuildingCell(buttress.mesh, {
@@ -2064,16 +2067,20 @@ function spawnCentralSkyneedle(context: LevelContext): void {
   }
 
   let yBase = 2.84;
-  for (const [index, height, width, depth, material, renderMaterial, materialId] of [
-    [0, 1.62, 1.36, 1.22, metalMaterial, towerMetalRenderMaterial, "metal"],
-    [1, 1.78, 1.16, 1.04, glassMaterial, towerGlassRenderMaterial, "glass"],
-    [2, 1.58, 0.98, 0.86, metalMaterial, towerMetalRenderMaterial, "metal"],
-    [3, 1.42, 0.78, 0.68, glassMaterial, towerGlassRenderMaterial, "glass"],
-    [4, 1.2, 0.56, 0.5, metalMaterial, towerMetalRenderMaterial, "metal"]
-  ] as const) {
+  const towerTiers = [
+    { height: 1.18, width: 1.42, depth: 1.26, material: metalMaterial, renderMaterial: towerMetalRenderMaterial, materialId: "metal" as const },
+    { height: 1.16, width: 1.26, depth: 1.12, material: glassMaterial, renderMaterial: towerGlassRenderMaterial, materialId: "glass" as const },
+    { height: 1.12, width: 1.08, depth: 0.96, material: glassMaterial, renderMaterial: towerGlassRenderMaterial, materialId: "glass" as const },
+    { height: 1.04, width: 0.92, depth: 0.8, material: metalMaterial, renderMaterial: towerMetalRenderMaterial, materialId: "metal" as const },
+    { height: 0.98, width: 0.76, depth: 0.66, material: glassMaterial, renderMaterial: towerGlassRenderMaterial, materialId: "glass" as const },
+    { height: 0.9, width: 0.6, depth: 0.52, material: glassMaterial, renderMaterial: towerGlassRenderMaterial, materialId: "glass" as const },
+    { height: 0.78, width: 0.46, depth: 0.4, material: metalMaterial, renderMaterial: towerMetalRenderMaterial, materialId: "metal" as const }
+  ];
+  for (const [index, tier] of towerTiers.entries()) {
+    const { height, width, depth, material, renderMaterial, materialId } = tier;
     const size = new THREE.Vector3(width, height, depth);
     const section = context.physics.addDynamicBox({
-      label: index === 4 ? "Central skyneedle crown tier" : "Central skyneedle taper tier",
+      label: index === towerTiers.length - 1 ? "Central skyneedle crown tier" : "Central skyneedle taper tier",
       material,
       renderMaterial,
       position: new THREE.Vector3(base.x, yBase + height * 0.5, base.z),
@@ -2082,28 +2089,30 @@ function spawnCentralSkyneedle(context: LevelContext): void {
       category: "structure",
       scoreRole: "target",
       zoneId,
-      canFracture: false,
+      canFracture: true,
       destructible: true,
       bodyType: "dynamic",
       chainSource: true,
-      supportGroupId,
+      ...skyneedleSupportRelease,
       supportReleaseMassScale: 1.2,
       supportReleaseImpulseScale: 1 + index * 0.08,
       supportReleaseTorqueScale: 0.9 + index * 0.08,
+      fractureResistance: materialId === "glass" ? 0.26 : 0.58,
       sleeping: true,
-      linearDamping: 0.68,
-      angularDamping: 1.08,
-      additionalMass: size.x * size.y * size.z * (materialId === "glass" ? 5.8 : 6.8),
-      scoreValue: index === 4 ? 420 : 360
+      linearDamping: 0.52,
+      angularDamping: 0.78,
+      additionalMass: size.x * size.y * size.z * (materialId === "glass" ? 1.05 : 4.1),
+      ccd: materialId !== "glass",
+      scoreValue: index === towerTiers.length - 1 ? 420 : 320
     });
     decorateBuildingCell(section.mesh, {
       size,
-      materialId: materialId as MaterialId,
+      materialId,
       scoreRole: "target",
       style: "glassTower",
       floor: index,
       column: 0,
-      floors: 5,
+      floors: towerTiers.length,
       columns: 1
     });
     section.mesh.userData.disposeMaterial = false;
@@ -2121,18 +2130,20 @@ function spawnCentralSkyneedle(context: LevelContext): void {
     category: "structure",
     scoreRole: "target",
     zoneId,
-    canFracture: false,
+    canFracture: true,
     destructible: true,
     bodyType: "dynamic",
     chainSource: true,
-    supportGroupId,
+    ...skyneedleSupportRelease,
     supportReleaseMassScale: 0.82,
     supportReleaseImpulseScale: 1.28,
     supportReleaseTorqueScale: 1.24,
+    fractureResistance: 0.52,
     sleeping: true,
     linearDamping: 0.56,
     angularDamping: 0.92,
-    additionalMass: 0.8,
+    additionalMass: 0.55,
+    ccd: true,
     scoreValue: 260
   });
   spire.mesh.userData.disposeMaterial = false;
@@ -3189,6 +3200,7 @@ function spawnBuildingStack(context: LevelContext, spec: BuildingSpec): void {
       const local = new THREE.Vector3(offsetX, groupHeight * 0.5 + floor * floorStep, offsetZ);
       local.applyQuaternion(rotation);
       const isRagdollStructure = shouldRagdollBuildingStack(spec);
+      const brittleGlassTower = spec.materialId === "glass" && spec.style === "glassTower";
       const object = context.physics.addDynamicBox({
         label: spec.label,
         material,
@@ -3205,12 +3217,13 @@ function spawnBuildingStack(context: LevelContext, spec: BuildingSpec): void {
         chainSource: true,
         scoreValue: spec.scoreValue * groupColumns * groupFloors,
         sleeping: true,
-        friction: Math.max(0.86, material.friction),
-        restitution: Math.min(0.08, material.restitution),
-        linearDamping: isRagdollStructure ? 0.58 : 0.72,
-        angularDamping: isRagdollStructure ? 1.05 : 1.35,
-        additionalMass: groupSize.x * groupSize.y * groupSize.z * (isRagdollStructure ? 3.3 : 3.8),
-        ccd: isRagdollStructure
+        fractureResistance: brittleGlassTower ? 0.46 : 1,
+        friction: brittleGlassTower ? 0.28 : Math.max(0.86, material.friction),
+        restitution: brittleGlassTower ? 0.32 : Math.min(0.08, material.restitution),
+        linearDamping: brittleGlassTower ? 0.34 : isRagdollStructure ? 0.58 : 0.72,
+        angularDamping: brittleGlassTower ? 0.58 : isRagdollStructure ? 1.05 : 1.35,
+        additionalMass: groupSize.x * groupSize.y * groupSize.z * (brittleGlassTower ? 1.05 : isRagdollStructure ? 3.3 : 3.8),
+        ccd: isRagdollStructure && !brittleGlassTower
       });
       decorateBuildingCell(object.mesh, {
         size: groupSize,

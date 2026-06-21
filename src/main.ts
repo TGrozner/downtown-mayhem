@@ -140,6 +140,11 @@ const AIRCRAFT_CRASH_PROJECTILE: ProjectileDefinition = {
 const AIRCRAFT_COLLISION_RADIUS = 0.82;
 const AIRCRAFT_GROUND_CRASH_Y = 0.42;
 const AIRCRAFT_DIRECT_IMPACT_MIN_SPEED = 34;
+const AIRCRAFT_FLIGHT_TIMEOUT_MS = 18_000;
+const AIRCRAFT_PENETRATION_MIN_DISTANCE = 2.7;
+const AIRCRAFT_PENETRATION_MAX_DISTANCE = 6.4;
+const AIRCRAFT_PENETRATION_MAX_HITS = 3;
+const AIRCRAFT_PENETRATION_RADIUS = 1.05;
 
 interface BurningHazard {
   id: number;
@@ -2061,6 +2066,7 @@ class Game {
   private spectacleFocusUpdatedAt = 0;
   private readonly projectileSpectacleFocus = new THREE.Vector3();
   private hasProjectileSpectacleFocus = false;
+  private aircraftFlightStartedAt: number | null = null;
   private disposed = false;
   private frozenForCapture = false;
   private levelReloadInProgress = false;
@@ -2237,6 +2243,8 @@ class Game {
     this.disposeRenderWarmupGroup();
     const disposedObjects = new Set<THREE.Object3D>();
     const disposedMaterials = new Set<THREE.Material>();
+    this.scene.remove(this.aimMarker);
+    disposeObject(this.aimMarker, disposedMaterials);
     for (const object of this.arenaObjects) {
       if (disposedObjects.has(object)) {
         continue;
@@ -2541,6 +2549,8 @@ class Game {
       const impact = this.detectAircraftCrash();
       if (impact) {
         this.handleAircraftCrash(impact.point, impact.object);
+      } else if (this.aircraftFlightStartedAt !== null && performance.now() - this.aircraftFlightStartedAt >= AIRCRAFT_FLIGHT_TIMEOUT_MS) {
+        this.handleAircraftCrash(this.aircraft.getPosition(), null);
       } else {
         this.status = this.aircraftFlightStatus();
       }
@@ -2762,6 +2772,7 @@ class Game {
     this.nextChainCooldownSweep = 0;
     this.spectacleFocusScore = 0;
     this.spectacleFocusUpdatedAt = 0;
+    this.aircraftFlightStartedAt = null;
     this.clearProjectileSpectacleFocus();
     this.runState.resetAim();
     this.arcadeResult = null;
@@ -3563,6 +3574,7 @@ class Game {
     }
     this.clearProjectileSpectacleFocus();
     this.scoreTracker.beginShot(AIRCRAFT_CRASH_PROJECTILE);
+    this.aircraftFlightStartedAt = performance.now();
     this.runState.beginFlight();
     this.status = this.aircraftFlightStatus();
   }
@@ -3668,11 +3680,13 @@ class Game {
     const speed = velocity.length();
     const directionVector = speed > 0.01 ? velocity.clone().normalize() : this.aircraft.getForward();
     const sourceObject = this.createAircraftImpactSource(point, directionVector, velocity);
+    const penetration = this.computeAircraftPenetration(point, directionVector, speed, sourceObject, hitObject);
+    this.aircraftFlightStartedAt = null;
     this.aircraft.markCrashed();
     this.input.setPlaneBoost(false);
     this.clearProjectileSpectacleFocus();
     this.resolveArcadeImpact({
-      point,
+      point: penetration.detonationPoint,
       projectile: AIRCRAFT_CRASH_PROJECTILE,
       sourceObject,
       hitObject,
@@ -3681,8 +3695,68 @@ class Game {
       powerScale: THREE.MathUtils.clamp(0.92 + speed / 80, 1.02, 1.28),
       sizeScale: 1.08,
       cleanupSource: () => this.physics.removeObject(sourceObject.id),
+      directResults: penetration.directResults.length > 0 ? penetration.directResults : undefined,
       statusName: "RC crash"
     });
+  }
+
+  private computeAircraftPenetration(
+    entryPoint: THREE.Vector3,
+    directionVector: THREE.Vector3,
+    speed: number,
+    sourceObject: PhysicsObject,
+    hitObject: PhysicsObject | null
+  ): { detonationPoint: THREE.Vector3; directResults: ExplosionResult[] } {
+    if (!hitObject || !hitObject.destructible || speed <= 0.01) {
+      return { detonationPoint: entryPoint.clone(), directResults: [] };
+    }
+
+    const penetrationDistance = THREE.MathUtils.clamp(
+      THREE.MathUtils.mapLinear(speed, 14, 28, AIRCRAFT_PENETRATION_MIN_DISTANCE, AIRCRAFT_PENETRATION_MAX_DISTANCE),
+      AIRCRAFT_PENETRATION_MIN_DISTANCE,
+      AIRCRAFT_PENETRATION_MAX_DISTANCE
+    );
+    const pathStart = entryPoint.clone().addScaledVector(directionVector, -0.28);
+    const pathEnd = entryPoint.clone().addScaledVector(directionVector, penetrationDistance);
+    pathEnd.y = Math.max(0.08, pathEnd.y);
+
+    const candidates: Array<{ point: THREE.Vector3; object: PhysicsObject; distance: number }> = [];
+    const seen = new Set<number>();
+    const addCandidate = (candidate: { point: THREE.Vector3; object: PhysicsObject; distance: number } | null): void => {
+      if (!candidate || seen.has(candidate.object.id)) {
+        return;
+      }
+      seen.add(candidate.object.id);
+      candidates.push(candidate);
+    };
+
+    addCandidate({ point: entryPoint.clone(), object: hitObject, distance: 0 });
+    for (const object of this.physics.getSegmentCandidatesInto(
+      this.aircraftSegmentCandidates,
+      pathStart,
+      pathEnd,
+      AIRCRAFT_PENETRATION_RADIUS + 0.55
+    )) {
+      if (object.category === "projectile" || object.isDebris || object.zoneId === "surface") {
+        continue;
+      }
+      addCandidate(sweptImpactCandidate(AIRCRAFT_PENETRATION_RADIUS, object, pathStart, pathEnd));
+    }
+
+    candidates.sort((a, b) => a.distance - b.distance);
+    const directResults: ExplosionResult[] = [];
+    const impactSpeed = Math.max(AIRCRAFT_DIRECT_IMPACT_MIN_SPEED, speed * 1.62);
+    for (const candidate of candidates.slice(0, AIRCRAFT_PENETRATION_MAX_HITS)) {
+      if (!candidate.object.canFracture) {
+        this.applyDirectImpactImpulse(AIRCRAFT_CRASH_PROJECTILE, candidate.object, directionVector, 1.05);
+      }
+      directResults.push(this.destruction.impact(sourceObject, candidate.object, candidate.point, impactSpeed));
+    }
+
+    const deepestHit = candidates[Math.min(candidates.length - 1, AIRCRAFT_PENETRATION_MAX_HITS - 1)];
+    const detonationPoint = (deepestHit?.point ?? entryPoint).clone().lerp(pathEnd, deepestHit ? 0.48 : 1);
+    detonationPoint.y = Math.max(0.08, detonationPoint.y);
+    return { detonationPoint, directResults };
   }
 
   private createAircraftImpactSource(point: THREE.Vector3, direction: THREE.Vector3, velocity: THREE.Vector3): PhysicsObject {
@@ -3710,7 +3784,12 @@ class Game {
   private handleImpact(point: THREE.Vector3, active: ActiveProjectile, hitObject: PhysicsObject | null): void {
     const projectile = active.definition;
     const direction = active.object.body.linvel();
-    const directionVector = new THREE.Vector3(direction.x, direction.y, direction.z).normalize();
+    const directionVector = new THREE.Vector3(direction.x, direction.y, direction.z);
+    if (directionVector.lengthSq() > 0.0001) {
+      directionVector.normalize();
+    } else {
+      directionVector.copy(this.cannon.getDirection());
+    }
     if (hitObject && this.shouldProjectilePenetrate(active, hitObject)) {
       this.handleProjectilePenetration(point, active, hitObject, directionVector);
       return;
@@ -3775,18 +3854,23 @@ class Game {
     powerScale: number;
     sizeScale: number;
     cleanupSource: () => void;
+    directResults?: ExplosionResult[];
     specialActive?: ActiveProjectile;
     statusName: string;
   }): void {
     const { point, projectile, sourceObject, hitObject, directionVector, sourceSpeed, powerScale, sizeScale } = options;
-    if (hitObject && !hitObject.canFracture) {
-      this.applyDirectImpactImpulse(projectile, hitObject, directionVector, powerScale);
+    const directResults: ExplosionResult[] = [];
+    if (options.directResults) {
+      directResults.push(...options.directResults);
+    } else if (hitObject) {
+      if (!hitObject.canFracture) {
+        this.applyDirectImpactImpulse(projectile, hitObject, directionVector, powerScale);
+      }
+      if (hitObject.destructible) {
+        directResults.push(this.destruction.impact(sourceObject, hitObject, point, sourceSpeed * directImpactScale(projectile.id)));
+      }
     }
 
-    const directResult =
-      hitObject && hitObject.destructible
-        ? this.destruction.impact(sourceObject, hitObject, point, sourceSpeed * directImpactScale(projectile.id))
-        : null;
     options.cleanupSource();
 
     const strength = projectile.impulse * powerScale * projectile.fractureBoost * residualBlastScale(projectile.id);
@@ -3803,7 +3887,7 @@ class Game {
     });
     this.focusSpectacleOn(point, result, 160, true);
     const scoreEvents = [
-      ...(directResult ? this.applyExplosionResult(directResult, 0, projectile.id === "ignite" ? 1 : 0) : []),
+      ...directResults.flatMap((directResult) => this.applyExplosionResult(directResult, 0, projectile.id === "ignite" ? 1 : 0)),
       ...this.applyExplosionResult(result, 0, projectile.id === "ignite" ? 1.35 : projectile.id === "pulse" ? 0.35 : 0),
       ...(options.specialActive ? this.playProjectileSpecial(projectile.id, point, directionVector, options.specialActive) : [])
     ];
@@ -3823,7 +3907,11 @@ class Game {
     this.hitStopTimer = this.settings.motionEffects ? 0.065 : 0;
     this.slowMotionTimer = this.settings.motionEffects ? 0.58 : 0;
     this.runState.beginSpectacle(performance.now());
-    this.status = `${options.statusName} impact: ${(directResult?.fracturedBodies ?? 0) + result.fracturedBodies} fractures, ${result.affectedBodies} objects hit.`;
+    const directFractures = directResults.reduce((total, directResult) => total + directResult.fracturedBodies, 0);
+    const directHits = directResults.reduce((total, directResult) => total + directResult.affectedBodies, 0);
+    this.status = `${options.statusName} impact: ${directFractures + result.fracturedBodies} fractures, ${
+      directHits + result.affectedBodies
+    } objects hit.`;
   }
 
   private applyDirectImpactImpulse(
@@ -3885,6 +3973,9 @@ class Game {
     if (active.definition.id !== "gravity" || active.piercedObjectIds.size === 0) {
       return false;
     }
+    if (active.piercedObjectIds.size < 3 && active.age < 2.2 && position.y > active.radius * 2.1) {
+      return false;
+    }
     const releaseSpeed = HEAVY_PROJECTILE_CAMERA_RELEASE_SPEED * Math.max(0.85, active.powerScale);
     if (velocity.lengthSq() <= releaseSpeed * releaseSpeed) {
       return true;
@@ -3901,10 +3992,10 @@ class Game {
       return false;
     }
     const releaseSpeed = HEAVY_PROJECTILE_CAMERA_RELEASE_SPEED * Math.max(0.85, active.powerScale);
-    if (active.piercedObjectIds.size >= 2 && retainedSpeed <= releaseSpeed) {
+    if (active.piercedObjectIds.size >= 3 && retainedSpeed <= releaseSpeed) {
       return true;
     }
-    if (active.piercedObjectIds.size >= 4) {
+    if (active.piercedObjectIds.size >= 6) {
       return true;
     }
     return active.age >= HEAVY_PROJECTILE_CAMERA_RELEASE_AGE && retainedSpeed <= releaseSpeed * 1.45;
@@ -3918,13 +4009,16 @@ class Game {
   }
 
   private shouldProjectilePenetrate(active: ActiveProjectile, hitObject: PhysicsObject): boolean {
-    if (!hitObject.destructible || !hitObject.canFracture) {
-      return false;
-    }
     if (active.piercedObjectIds.size >= MAX_PROJECTILE_PENETRATIONS[active.definition.id]) {
       return false;
     }
     if (active.definition.id !== "gravity") {
+      return false;
+    }
+    if (!hitObject.destructible) {
+      return false;
+    }
+    if (!hitObject.canFracture && !isBrittlePenetrationMaterial(hitObject.materialId)) {
       return false;
     }
     return hitObject.materialId !== "rubber" || Math.max(hitObject.dimensions.x, hitObject.dimensions.z) <= 1.2;
@@ -3937,7 +4031,8 @@ class Game {
     direction: THREE.Vector3
   ): void {
     active.piercedObjectIds.add(hitObject.id);
-    const speed = speedOf(active.object);
+    const measuredSpeed = speedOf(active.object);
+    const speed = heavyPenetrationSpeed(active, hitObject, measuredSpeed);
     const impactSpeed = speed * penetrationImpactScale(active.definition.id, hitObject);
     const result = this.destruction.impact(active.object, hitObject, point, impactSpeed);
     if (active.definition.id === "gravity" && result.fracturedBodies > 0) {
@@ -3960,7 +4055,8 @@ class Game {
     });
 
     const retainedSpeed = speed * penetrationRetainedSpeed(active.definition.id, hitObject);
-    const nextPosition = point.clone().add(direction.clone().multiplyScalar(active.radius + 0.34));
+    const exitDistance = penetrationExitDistance(active, hitObject);
+    const nextPosition = point.clone().add(direction.clone().multiplyScalar(exitDistance));
     const nextVelocity = direction.clone().multiplyScalar(retainedSpeed);
     active.object.body.setTranslation({ x: nextPosition.x, y: nextPosition.y, z: nextPosition.z }, true);
     active.object.body.setLinvel({ x: nextVelocity.x, y: nextVelocity.y, z: nextVelocity.z }, true);
@@ -4577,9 +4673,16 @@ class Game {
   }
 
   private updateAimMarker(): void {
-    this.aimMarker.visible = this.gameMode === "cannon" && this.runState.phase === "aim";
+    const visible = this.gameMode === "cannon" && this.runState.phase === "aim";
+    this.aimMarker.visible = visible;
+    this.renderer.domElement.classList.toggle("is-cannon-aim", visible);
+    if (!visible) {
+      return;
+    }
     this.aimMarker.position.copy(this.aimMarkerPoint).addScaledVector(this.aimSurfaceNormal, AIM_MARKER_SURFACE_OFFSET);
     this.aimMarker.quaternion.setFromUnitVectors(AIM_SURFACE_NORMAL, this.aimSurfaceNormal);
+    const cameraDistance = this.cameraRig.camera.position.distanceTo(this.aimMarker.position);
+    this.aimMarker.scale.setScalar(THREE.MathUtils.clamp(cameraDistance * 0.035, 0.9, 1.8));
     this.aimMarkerMaterial.color.copy(PROJECTILES[this.selectedProjectile].color);
   }
 
@@ -4601,6 +4704,22 @@ function createAimMarker(material: THREE.MeshBasicMaterial): THREE.Group {
   const group = new THREE.Group();
   group.name = "aim impact reticle";
   group.renderOrder = 100;
+
+  const backingMaterial = new THREE.MeshBasicMaterial({
+    color: 0x031016,
+    transparent: true,
+    opacity: 0.74,
+    side: THREE.DoubleSide,
+    depthTest: false,
+    depthWrite: false
+  });
+  const backingRing = new THREE.Mesh(new THREE.RingGeometry(0.23, 0.45, 42), backingMaterial);
+  backingRing.rotation.x = -Math.PI * 0.5;
+  backingRing.renderOrder = 99;
+
+  const backingDot = new THREE.Mesh(new THREE.CircleGeometry(0.065, 18), backingMaterial);
+  backingDot.rotation.x = -Math.PI * 0.5;
+  backingDot.renderOrder = 99;
 
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.38, 42), material);
   ring.rotation.x = -Math.PI * 0.5;
@@ -4625,8 +4744,21 @@ function createAimMarker(material: THREE.MeshBasicMaterial): THREE.Group {
     tick.renderOrder = 100;
     return tick;
   });
+  const backingTickMaterial = backingMaterial;
+  const backingTicks = [
+    { geometry: new THREE.PlaneGeometry(0.24, 0.07), position: new THREE.Vector3(-0.5, 0, 0) },
+    { geometry: new THREE.PlaneGeometry(0.24, 0.07), position: new THREE.Vector3(0.5, 0, 0) },
+    { geometry: new THREE.PlaneGeometry(0.07, 0.24), position: new THREE.Vector3(0, 0, -0.5) },
+    { geometry: new THREE.PlaneGeometry(0.07, 0.24), position: new THREE.Vector3(0, 0, 0.5) }
+  ].map(({ geometry, position }) => {
+    const tick = new THREE.Mesh(geometry, backingTickMaterial);
+    tick.position.copy(position);
+    tick.rotation.x = -Math.PI * 0.5;
+    tick.renderOrder = 99;
+    return tick;
+  });
 
-  group.add(ring, dot, ...tickMeshes);
+  group.add(backingRing, backingDot, ...backingTicks, ring, dot, ...tickMeshes);
   return group;
 }
 
@@ -5177,6 +5309,29 @@ function projectileCollisionTarget(active: ActiveProjectile, collision: { first:
   return target;
 }
 
+function isBrittlePenetrationMaterial(materialId: MaterialId): boolean {
+  return materialId === "glass" || materialId === "foam" || materialId === "wood";
+}
+
+function heavyPenetrationSpeed(active: ActiveProjectile, target: PhysicsObject, measuredSpeed: number): number {
+  if (active.definition.id !== "gravity" || !isBrittlePenetrationMaterial(target.materialId)) {
+    return measuredSpeed;
+  }
+  const launchSpeed = active.definition.speed * active.powerScale;
+  const floorScale = target.materialId === "glass" || target.materialId === "foam" ? 0.72 : 0.58;
+  return Math.max(measuredSpeed, launchSpeed * floorScale);
+}
+
+function penetrationExitDistance(active: ActiveProjectile, target: PhysicsObject): number {
+  const base = active.radius + 0.34;
+  if (active.definition.id !== "gravity") {
+    return base;
+  }
+  const halfThickness = Math.max(target.dimensions.x, target.dimensions.y, target.dimensions.z) * 0.5;
+  const materialBoost = isBrittlePenetrationMaterial(target.materialId) ? 0.62 : 0.42;
+  return Math.max(base, active.radius + halfThickness * materialBoost + 0.34);
+}
+
 function penetrationImpactScale(projectileId: ProjectileId, target: PhysicsObject): number {
   if (projectileId === "gravity") {
     if (target.materialId === "concrete" || target.materialId === "metal") {
@@ -5186,7 +5341,7 @@ function penetrationImpactScale(projectileId: ProjectileId, target: PhysicsObjec
       return 0.78;
     }
     if (target.materialId === "glass" || target.materialId === "foam") {
-      return 0.58;
+      return 0.72;
     }
   }
   return 0.18;
@@ -5201,7 +5356,7 @@ function penetrationRetainedSpeed(projectileId: ProjectileId, target: PhysicsObj
       return 0.68;
     }
     if (target.materialId === "glass" || target.materialId === "foam") {
-      return 0.76;
+      return 0.9;
     }
   }
   return 0.42;

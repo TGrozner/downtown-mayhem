@@ -5,10 +5,10 @@ import { perfMonitor } from "./perf";
 import { PhysicsWorld, type DynamicVisualProxy, type FrozenVisualHandle, type PhysicsCategory, type PhysicsObject, type ScoreRole } from "./physics";
 import { type RandomSource, randomInt, randomRange, randomUnitVectorInto } from "./random";
 
-const IMMEDIATE_PRIMARY_FRAGMENT_VISUALS = 6;
+const IMMEDIATE_PRIMARY_FRAGMENT_VISUALS = 8;
 const IMMEDIATE_DEBRIS_FRAGMENT_VISUALS = 3;
-const PRIMARY_PHYSICAL_FRAGMENT_LIMIT = 8;
-const SECONDARY_PHYSICAL_FRAGMENT_LIMIT = 3;
+const PRIMARY_PHYSICAL_FRAGMENT_LIMIT = 12;
+const SECONDARY_PHYSICAL_FRAGMENT_LIMIT = 4;
 const MIN_PHYSICAL_FRAGMENT_VOLUME = 0.012;
 const MAX_VISUAL_ONLY_FRAGMENTS = 320;
 const MAX_VISUAL_ONLY_FRAGMENT_UPDATES_PER_FRAME = 140;
@@ -962,7 +962,7 @@ export class DestructionSystem {
     const direction = this.computeBlastDirection(offset, material.id === "concrete" || material.id === "metal" ? 0.42 : 0.56, 0.28);
     const speed =
       ((blastStrength * (falloff + 0.12)) / Math.max(0.72, material.massFactor)) *
-      (sourceWasDebris ? 0.18 : 0.28) *
+      (sourceWasDebris ? 0.18 : 0.22) *
       smallFragmentFlightBoost(plan.size);
     const velocity = inheritedVelocity.clone().multiplyScalar(0.16).add(direction.multiplyScalar(speed));
     const angularVelocity = randomUnitVectorInto(new THREE.Vector3(), this.rng).multiplyScalar(
@@ -1515,7 +1515,8 @@ export class DestructionSystem {
     const minBudget = Math.min(minCount, fragmentBudget);
     const maxBudget = Math.max(minBudget, Math.min(maxCount + 4, fragmentBudget));
     const energyBonus = Math.min(4, Math.floor(Math.max(0, energy - material.fractureThreshold) / 10));
-    const count = clampInt(randomInt(this.rng, minCount, maxCount) + energyBonus, minBudget, maxBudget);
+    const chunkScale = size.y >= 0.9 || size.length() >= 1.45 ? 0.86 : 1;
+    const count = clampInt(Math.round((randomInt(this.rng, minCount, maxCount) + energyBonus) * chunkScale), minBudget, maxBudget);
     const plans: FragmentPlan[] = [];
 
     for (let i = 0; i < count; i += 1) {
@@ -1574,15 +1575,15 @@ export class DestructionSystem {
     const distance = Math.max(offset.length(), 0.001);
     const falloff = distance < blastRadius ? (1 - distance / blastRadius) ** 1.45 : 0.12;
     const smallFragmentBoost = smallFragmentFlightBoost(fragment.dimensions);
-    const lift = material.id === "concrete" || material.id === "metal" ? 0.52 : 0.68;
+    const lift = material.id === "concrete" || material.id === "metal" ? 0.42 : 0.54;
     const direction = this.computeBlastDirection(offset, lift, 0.24);
     const impulseMagnitude =
-      (blastStrength * (falloff + 0.18)) / Math.max(0.48, material.massFactor) * 0.78 * smallFragmentBoost;
+      (blastStrength * (falloff + 0.18)) / Math.max(0.48, material.massFactor) * 0.68 * smallFragmentBoost;
     const impulse = direction.multiplyScalar(impulseMagnitude);
     fragment.body.applyImpulse({ x: impulse.x, y: impulse.y, z: impulse.z }, true);
 
     const torque = randomUnitVectorInto(this.scratchRandomDirection, this.rng).multiplyScalar(
-      blastStrength * 0.13 * material.angularResponse * smallFragmentBoost
+      blastStrength * 0.1 * material.angularResponse * smallFragmentBoost
     );
     fragment.body.applyTorqueImpulse({ x: torque.x, y: torque.y, z: torque.z }, true);
   }

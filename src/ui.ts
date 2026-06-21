@@ -564,6 +564,7 @@ export class GameUI {
   private bindResultActions(): void {
     this.scorePanel.querySelector<HTMLButtonElement>("[data-action='result-retry']")?.addEventListener("click", () => this.callbacks.reset());
     this.scorePanel.querySelector<HTMLButtonElement>("[data-action='result-next']")?.addEventListener("click", () => this.callbacks.nextLevel());
+    this.scorePanel.querySelector<HTMLButtonElement>("[data-action='result-menu']")?.addEventListener("click", () => this.callbacks.openMainMenu());
   }
 
   private requireElement<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -676,6 +677,7 @@ function renderScore(state: UIState): string {
       <div><span>Motion Bonus</span><strong>${formatScoreNumber(score.remainingDebrisMotion)}</strong></div>
     </div>
     <div class="hud__result-actions">
+      <button type="button" data-action="result-menu">Menu</button>
       <button type="button" data-action="result-retry">Retry</button>
       <button type="button" data-action="result-next">Next Level</button>
     </div>
@@ -833,8 +835,12 @@ function installStyles(): void {
       width: 100%;
       height: 100%;
       background: #07090d;
-      cursor: none;
+      cursor: default;
       touch-action: none;
+    }
+
+    canvas.is-cannon-aim {
+      cursor: crosshair;
     }
 
     .hud {

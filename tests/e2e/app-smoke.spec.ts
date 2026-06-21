@@ -347,6 +347,32 @@ test("selects a projectile, fires, then resets to a ready trial", async ({ page 
   expect(consoleErrors).toEqual([]);
 });
 
+test("uses Space as game input after pointer-clicking Retry", async ({ page }) => {
+  test.setTimeout(LONG_TEST_TIMEOUT_MS);
+  const consoleErrors = trackRuntimeErrors(page);
+
+  await bootTrial(page, { width: 1024, height: 768 });
+  await expectRenderableCanvas(page);
+
+  const resetButton = page.locator("[data-action='reset']");
+  await expect(resetButton).toBeVisible({ timeout: UI_READY_TIMEOUT_MS });
+  const resetBox = await resetButton.boundingBox();
+  expect(resetBox).not.toBeNull();
+  await page.mouse.click(resetBox!.x + resetBox!.width * 0.5, resetBox!.y + resetBox!.height * 0.5);
+  await expect
+    .poll(() => page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getRenderWarmupState().phase), {
+      timeout: LEVEL_START_TIMEOUT_MS
+    })
+    .toBe("ready");
+  await expect(page.locator(".hud [data-role='shots']")).toHaveText("READY", { timeout: UI_READY_TIMEOUT_MS });
+
+  await page.keyboard.press("Space");
+
+  await expect(page.locator(".hud [data-role='shots']")).toHaveText("SPENT", { timeout: UI_READY_TIMEOUT_MS });
+  await expect(fireButton(page)).toBeDisabled();
+  expect(consoleErrors).toEqual([]);
+});
+
 test("records post-shot perf budgets", async ({ page }) => {
   test.skip(!RUN_PERF_SMOKE, "Set DOWNTOWN_MAYHEM_PERF_SMOKE=true to run the perf smoke.");
   test.setTimeout(LONG_TEST_TIMEOUT_MS);

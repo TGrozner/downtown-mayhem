@@ -3,13 +3,21 @@ import { ShotRunState } from "../../src/runState";
 import type { ScoreBreakdown } from "../../src/scoring";
 
 describe("ShotRunState", () => {
-  test("does not reveal the score from elapsed time alone", () => {
+  test("waits for settle before the force-score timeout", () => {
     const runState = new ShotRunState();
     runState.beginFlight();
     runState.beginSpectacle(1_000);
 
     expect(runState.evaluateScoreReveal(3_700, false)).toBe("waiting");
-    expect(runState.evaluateScoreReveal(120_000, false)).toBe("waiting");
+    expect(runState.evaluateScoreReveal(10_000, false)).toBe("waiting");
+  });
+
+  test("forces score reveal when motion never settles", () => {
+    const runState = new ShotRunState();
+    runState.beginFlight();
+    runState.beginSpectacle(1_000);
+
+    expect(runState.evaluateScoreReveal(15_000, false)).toBe("ready");
   });
 
   test("reveals the score only after consecutive settled frames", () => {

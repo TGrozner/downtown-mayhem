@@ -114,7 +114,7 @@ export class InputController {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (event.target instanceof HTMLElement && ["BUTTON", "INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) {
+    if (isKeyboardShortcutBlockedTarget(event.target)) {
       return;
     }
     this.pressedKeys.add(event.code);
@@ -267,6 +267,20 @@ function isFlightKey(code: string): boolean {
     code === "ShiftRight" ||
     code === "Space"
   );
+}
+
+function isKeyboardShortcutBlockedTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) {
+    return true;
+  }
+  if (target.tagName !== "BUTTON") {
+    return false;
+  }
+  const hud = target.closest<HTMLElement>(".hud");
+  return hud?.dataset.screen !== "play";
 }
 
 function applyDeadzone(value: number, deadzone: number): number {

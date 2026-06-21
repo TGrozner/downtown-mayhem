@@ -4,6 +4,7 @@ export type GamePhase = "aim" | "flight" | "spectacle" | "scored";
 export type ScoreRevealDecision = "inactive" | "waiting" | "ready";
 
 const SCORE_REVEAL_MIN_DELAY_MS = 2800;
+const SCORE_REVEAL_MAX_WAIT_MS = 14_000;
 const SCORE_SETTLED_FRAMES = 18;
 
 export class ShotRunState {
@@ -12,6 +13,7 @@ export class ShotRunState {
   score: ScoreBreakdown | null = null;
 
   private scoreRevealAt: number | null = null;
+  private scoreForceRevealAt: number | null = null;
   private scoreSettleFrames = 0;
 
   resetAim(): void {
@@ -19,6 +21,7 @@ export class ShotRunState {
     this.shotAvailable = true;
     this.score = null;
     this.scoreRevealAt = null;
+    this.scoreForceRevealAt = null;
     this.scoreSettleFrames = 0;
   }
 
@@ -27,12 +30,14 @@ export class ShotRunState {
     this.shotAvailable = false;
     this.score = null;
     this.scoreRevealAt = null;
+    this.scoreForceRevealAt = null;
     this.scoreSettleFrames = 0;
   }
 
   beginSpectacle(nowMs: number): void {
     this.phase = "spectacle";
     this.scoreRevealAt = nowMs + SCORE_REVEAL_MIN_DELAY_MS;
+    this.scoreForceRevealAt = nowMs + SCORE_REVEAL_MAX_WAIT_MS;
     this.scoreSettleFrames = 0;
   }
 
@@ -42,6 +47,9 @@ export class ShotRunState {
     }
     if (nowMs < this.scoreRevealAt) {
       return "waiting";
+    }
+    if (this.scoreForceRevealAt !== null && nowMs >= this.scoreForceRevealAt) {
+      return "ready";
     }
 
     this.scoreSettleFrames = sceneSettled ? this.scoreSettleFrames + 1 : 0;
@@ -55,6 +63,7 @@ export class ShotRunState {
     this.score = score;
     this.phase = "scored";
     this.scoreRevealAt = null;
+    this.scoreForceRevealAt = null;
     this.scoreSettleFrames = 0;
   }
 }
