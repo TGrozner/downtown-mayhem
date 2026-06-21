@@ -641,66 +641,52 @@ function createContactShadowTexture(): THREE.CanvasTexture {
   return texture;
 }
 
-function createDistantSkylineTexture(): THREE.CanvasTexture {
+function createDistantAtmosphereTexture(): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 1024;
   canvas.height = 256;
   const context = canvas.getContext("2d");
   if (!context) {
-    throw new Error("Unable to create distant skyline texture context");
+    throw new Error("Unable to create distant atmosphere texture context");
   }
 
   context.clearRect(0, 0, canvas.width, canvas.height);
-  const horizon = context.createLinearGradient(0, 0, 0, canvas.height);
-  horizon.addColorStop(0, "rgba(82, 154, 191, 0.01)");
-  horizon.addColorStop(0.58, "rgba(26, 54, 68, 0.1)");
-  horizon.addColorStop(1, "rgba(9, 15, 20, 0.2)");
-  context.fillStyle = horizon;
+  const airGlow = context.createRadialGradient(
+    canvas.width * 0.42,
+    canvas.height * 0.16,
+    12,
+    canvas.width * 0.44,
+    canvas.height * 0.52,
+    canvas.width * 0.58
+  );
+  airGlow.addColorStop(0, "rgba(248, 254, 255, 0.08)");
+  airGlow.addColorStop(0.42, "rgba(190, 231, 240, 0.1)");
+  airGlow.addColorStop(1, "rgba(190, 231, 240, 0)");
+  context.fillStyle = airGlow;
   context.fillRect(0, 0, canvas.width, canvas.height);
-
-  const buildings = [
-    [22, 104, 54, 112, "#13252d"],
-    [84, 76, 44, 140, "#1b333c"],
-    [142, 124, 66, 92, "#142830"],
-    [226, 62, 42, 154, "#203a45"],
-    [284, 96, 80, 120, "#142832"],
-    [384, 36, 58, 180, "#1b3440"],
-    [458, 118, 72, 98, "#13252e"],
-    [558, 72, 48, 144, "#203b45"],
-    [630, 104, 88, 112, "#172c35"],
-    [742, 52, 54, 164, "#1f3945"],
-    [814, 88, 64, 128, "#142833"],
-    [902, 116, 74, 100, "#192f38"]
-  ] as const;
-
-  for (const [x, top, width, height, color] of buildings) {
-    context.fillStyle = color;
-    context.fillRect(x, top, width, height);
-    context.fillStyle = "rgba(137, 232, 255, 0.2)";
-    for (let windowY = top + 18; windowY < top + height - 16; windowY += 24) {
-      for (let windowX = x + 9; windowX < x + width - 8; windowX += 15) {
-        if ((windowX + windowY) % 5 < 2) {
-          context.fillRect(windowX, windowY, 4, 9);
-        }
-      }
-    }
-    context.fillStyle = "rgba(255, 197, 91, 0.22)";
-    for (let windowY = top + 28; windowY < top + height - 18; windowY += 34) {
-      for (let windowX = x + 14; windowX < x + width - 12; windowX += 30) {
-        if ((windowX + top) % 7 < 3) {
-          context.fillRect(windowX, windowY, 5, 7);
-        }
-      }
-    }
-  }
 
   const haze = context.createLinearGradient(0, canvas.height * 0.55, 0, canvas.height);
   haze.addColorStop(0, "rgba(188, 235, 255, 0)");
-  haze.addColorStop(0.54, "rgba(190, 231, 240, 0.18)");
-  haze.addColorStop(1, "rgba(246, 209, 151, 0.32)");
+  haze.addColorStop(0.5, "rgba(199, 232, 238, 0.1)");
+  haze.addColorStop(0.8, "rgba(246, 219, 170, 0.14)");
+  haze.addColorStop(1, "rgba(246, 219, 170, 0)");
   context.fillStyle = haze;
   context.fillRect(0, 0, canvas.width, canvas.height);
-  applySkylineTextureFade(context, canvas.width, canvas.height);
+
+  context.save();
+  context.translate(canvas.width * 0.5, canvas.height * 0.68);
+  context.rotate(-0.04);
+  for (let index = -3; index <= 3; index += 1) {
+    const x = index * 165;
+    const band = context.createLinearGradient(x - 130, 0, x + 180, 0);
+    band.addColorStop(0, "rgba(255, 255, 255, 0)");
+    band.addColorStop(0.5, "rgba(236, 246, 244, 0.075)");
+    band.addColorStop(1, "rgba(255, 255, 255, 0)");
+    context.fillStyle = band;
+    context.fillRect(x - 145, -18, 330, 36);
+  }
+  context.restore();
+  applyAtmosphereTextureFade(context, canvas.width, canvas.height);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -754,7 +740,7 @@ function createIndustrialHazeTexture(): THREE.CanvasTexture {
   return texture;
 }
 
-function applySkylineTextureFade(context: CanvasRenderingContext2D, width: number, height: number): void {
+function applyAtmosphereTextureFade(context: CanvasRenderingContext2D, width: number, height: number): void {
   context.save();
   context.globalCompositeOperation = "destination-in";
   const horizontal = context.createLinearGradient(0, 0, width, 0);
@@ -2804,20 +2790,20 @@ class Game {
   }
 
   private addPremiumCityAtmosphere(): void {
-    const skylineTexture = this.trackPremiumSceneTexture(createDistantSkylineTexture());
-    const skylineMaterial = new THREE.MeshBasicMaterial({
-      map: skylineTexture,
+    const atmosphereTexture = this.trackPremiumSceneTexture(createDistantAtmosphereTexture());
+    const atmosphereMaterial = new THREE.MeshBasicMaterial({
+      map: atmosphereTexture,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.86,
       depthWrite: false,
       fog: false,
       toneMapped: false
     });
     this.addArenaBillboardPlane(
-      "Distant downtown skyline",
+      "Distant atmospheric depth",
       new THREE.Vector3(0, 5.2, -25.8),
       new THREE.Vector2(78, 14.2),
-      skylineMaterial,
+      atmosphereMaterial,
       PREMIUM_ATMOSPHERE_RENDER_ORDER
     );
 
