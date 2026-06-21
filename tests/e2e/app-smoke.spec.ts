@@ -192,6 +192,36 @@ test("shows a clear three-level selector without free play", async ({ page }) =>
   expect(consoleErrors).toEqual([]);
 });
 
+test("arms the RC crash run before launching on mobile", async ({ page }) => {
+  test.setTimeout(LONG_TEST_TIMEOUT_MS);
+  const consoleErrors = trackRuntimeErrors(page);
+
+  await useSmokePerformanceSettings(page);
+  await page.setViewportSize(MOBILE_VIEWPORT);
+  await page.goto(SMOKE_URL);
+
+  await clickUi(page.locator("[data-mode='plane']"));
+  await clickUi(levelCard(page, "Hazard Junction"));
+  await expectLevelReady(page, "Hazard Junction");
+  await expectRenderableCanvas(page);
+  await expect(page.locator(".hud")).toHaveClass(/is-plane-mode/);
+  await expect(fireButton(page)).toHaveText("START RUN");
+  await expect(page.locator(".hud [data-role='shots']")).toHaveText("READY");
+  await expect(page.getByRole("button", { name: "Heavy" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "W" })).toHaveCount(0);
+  await expect(page.locator(".hud__plane-boost")).toBeHidden();
+
+  await clickUi(fireButton(page));
+  await expect(page.locator(".hud [data-role='shots']")).toHaveText("AIRBORNE");
+  await expect(page.locator(".hud")).toHaveClass(/is-plane-flying/);
+  await expect(page.locator(".hud__plane-boost")).toBeVisible();
+
+  await clickUi(page.locator("[data-action='reset']"));
+  await expect(page.locator(".hud [data-role='shots']")).toHaveText("READY");
+  await expect(page.locator(".hud__plane-boost")).toBeHidden();
+  expect(consoleErrors).toEqual([]);
+});
+
 test("keeps the initial city render inside draw-call budgets and visually stable", async ({ page }) => {
   test.setTimeout(LONG_TEST_TIMEOUT_MS);
   const consoleErrors = trackRuntimeErrors(page);
