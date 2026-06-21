@@ -463,7 +463,7 @@ function trackRuntimeErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("console", (message) => {
     const text = message.text();
-    if (message.type() === "error" && !isIgnoredGpuConsoleError(text)) {
+    if (message.type() === "error" && !isIgnoredBrowserBackendConsoleError(text)) {
       errors.push(text);
     }
   });
@@ -471,8 +471,12 @@ function trackRuntimeErrors(page: Page): string[] {
   return errors;
 }
 
-function isIgnoredGpuConsoleError(text: string): boolean {
-  return text.includes("THREE.WebGLProgram: Shader Error") || text.includes("THREE.THREE.WebGLProgram: Shader Error");
+function isIgnoredBrowserBackendConsoleError(text: string): boolean {
+  return (
+    text.includes("THREE.WebGLProgram: Shader Error") ||
+    text.includes("THREE.THREE.WebGLProgram: Shader Error") ||
+    text.includes("The AudioContext encountered an error from the audio device or the WebAudio renderer.")
+  );
 }
 
 async function bootTrial(page: Page, viewport: { width: number; height: number }): Promise<void> {
