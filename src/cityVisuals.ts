@@ -831,11 +831,48 @@ function addRoofDetail(mesh: THREE.Mesh, options: BuildingCellVisualOptions, roo
       y: size.y * 0.5 + 0.12,
       rotationY: Math.PI * 0.06
     });
+    if (options.style === "warehouse") {
+      for (const z of [-0.22, 0.22]) {
+        addChildBox(mesh, size.x * 0.48, 0.04, 0.055, material("roof_unit"), {
+          y: size.y * 0.5 + 0.14,
+          z: size.z * z
+        });
+      }
+    } else {
+      addChildCylinder(mesh, 0.028, 0.034, size.x * 0.54, material("service_pipe"), {
+        y: size.y * 0.5 + 0.15,
+        z: -size.z * 0.22,
+        rotationZ: Math.PI * 0.5
+      });
+    }
   } else if (options.style === "apartment" || options.style === "market") {
     addChildCylinder(mesh, 0.055, 0.055, 0.18, material("water_tank"), {
       x: size.x * 0.22,
       y: size.y * 0.5 + 0.17,
       z: -size.z * 0.22
+    });
+    if (options.style === "apartment") {
+      addChildBox(mesh, size.x * 0.34, 0.036, size.z * 0.18, material("warm_roof"), {
+        x: -size.x * 0.18,
+        y: size.y * 0.5 + 0.142,
+        z: -size.z * 0.18
+      });
+    }
+  } else if (options.style === "civic") {
+    addChildBox(mesh, size.x * 0.32, 0.04, size.z * 0.32, material("market_trim"), {
+      y: size.y * 0.5 + 0.14
+    });
+    addChildCylinder(mesh, 0.012, 0.018, 0.34, material("roof_rail"), {
+      y: size.y * 0.5 + 0.32
+    });
+  } else if (options.style === "utility") {
+    addChildBox(mesh, size.x * 0.66, 0.035, 0.045, material("service_pipe"), {
+      y: size.y * 0.5 + 0.142,
+      z: size.z * 0.24
+    });
+    addChildBox(mesh, 0.045, 0.035, size.z * 0.58, material("service_pipe"), {
+      x: -size.x * 0.26,
+      y: size.y * 0.5 + 0.144
     });
   }
 }
@@ -1107,6 +1144,46 @@ function paletteFor(style: BuildingVisualStyle, scoreRole: ScoreRole): { facade:
       sign: material("cool_sign")
     };
   }
+  if (style === "industrial") {
+    return {
+      facade: material("industrial_facade"),
+      trim: material("scraped_metal"),
+      roof: material("dark_roof"),
+      sign: material("hazard_sign")
+    };
+  }
+  if (style === "civic") {
+    return {
+      facade: material("civic_facade"),
+      trim: material("market_trim"),
+      roof: material("warm_roof"),
+      sign: material("cool_sign")
+    };
+  }
+  if (style === "utility") {
+    return {
+      facade: material("utility_facade"),
+      trim: material("service_pipe"),
+      roof: material("dark_roof"),
+      sign: material("electric_marker")
+    };
+  }
+  if (style === "apartment") {
+    return {
+      facade: material("apartment_facade"),
+      trim: material("balcony_rail"),
+      roof: material("warm_roof"),
+      sign: material("market_sign")
+    };
+  }
+  if (style === "warehouse") {
+    return {
+      facade: material("warehouse_facade"),
+      trim: material("dark_trim"),
+      roof: material("dark_roof"),
+      sign: material("cool_sign")
+    };
+  }
   return {
     facade: material("neutral_facade"),
     trim: material("dark_trim"),
@@ -1219,6 +1296,16 @@ function createMaterial(key: string): THREE.Material {
         depthWrite: false,
         map: materialAtlasTile(8)
       });
+    case "industrial_facade":
+      return new THREE.MeshStandardMaterial({ color: 0x515d63, roughness: 0.76, metalness: 0.08, map: materialAtlasTile(12) });
+    case "civic_facade":
+      return new THREE.MeshStandardMaterial({ color: 0x77736a, roughness: 0.86, metalness: 0.02, map: materialAtlasTile(15) });
+    case "utility_facade":
+      return new THREE.MeshStandardMaterial({ color: 0x4a5962, roughness: 0.72, metalness: 0.16, map: materialAtlasTile(2) });
+    case "apartment_facade":
+      return new THREE.MeshStandardMaterial({ color: 0x6c5e55, roughness: 0.8, metalness: 0.02, map: materialAtlasTile(13) });
+    case "warehouse_facade":
+      return new THREE.MeshStandardMaterial({ color: 0x596269, roughness: 0.78, metalness: 0.06, map: materialAtlasTile(3) });
     case "cool_trim":
       return new THREE.MeshStandardMaterial({ color: 0x7ec7d2, roughness: 0.46, metalness: 0.22 });
     case "cool_sign":

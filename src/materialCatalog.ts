@@ -165,25 +165,28 @@ export class MaterialCatalog {
 
     if (id === "glass") {
       return new THREE.MeshPhysicalMaterial({
-        color: def.color,
+        color: 0x7fe8f4,
         transparent: true,
-        opacity: 0.42,
-        roughness: 0.22,
+        opacity: 0.5,
+        roughness: 0.14,
         metalness: 0,
         map: materialAtlasTile(8),
-        transmission: 0.15,
-        thickness: 0.3,
+        transmission: 0.22,
+        thickness: 0.42,
+        clearcoat: 0.75,
+        clearcoatRoughness: 0.18,
         depthWrite: false,
-        envMapIntensity: 0.75
+        envMapIntensity: 1.05
       });
     }
 
     if (id === "metal") {
       return new THREE.MeshStandardMaterial({
-        color: def.color,
-        roughness: 0.38,
-        metalness: 0.82,
-        map: materialAtlasTile(0)
+        color: 0x465765,
+        roughness: 0.31,
+        metalness: 0.9,
+        map: materialAtlasTile(0),
+        envMapIntensity: 0.95
       });
     }
 
@@ -198,8 +201,8 @@ export class MaterialCatalog {
 
     if (id === "foam") {
       return new THREE.MeshStandardMaterial({
-        color: def.color,
-        roughness: 0.78,
+        color: 0xf4df82,
+        roughness: 0.74,
         metalness: 0.0,
         map: materialAtlasTile(7)
       });
@@ -207,16 +210,16 @@ export class MaterialCatalog {
 
     if (id === "wood") {
       return new THREE.MeshStandardMaterial({
-        color: def.color,
-        roughness: 0.65,
+        color: 0xa96431,
+        roughness: 0.7,
         metalness: 0,
         map: materialAtlasTile(14)
       });
     }
 
     return new THREE.MeshStandardMaterial({
-      color: def.color,
-      roughness: 0.93,
+      color: 0x777b76,
+      roughness: 0.96,
       metalness: 0,
       map: materialAtlasTile(3)
     });

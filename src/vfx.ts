@@ -438,6 +438,7 @@ export class ParticleSystem {
     this.spawnDirectionalBlast(origin, normalizedImpactDirectionInto(this.responseDirection, context.impactDirection), visualRadius, profile, dustColor, particleScale);
     this.spawnStreaks(origin, visualRadius, profile.streakColor, Math.round(14 * streakAmount), 0.52);
     this.spawnSmokePuffs(coreOrigin, visualRadius, smokeColor, smokeAmount);
+    this.spawnAftermathBloom(origin, visualRadius, dustColor, smokeColor, particleScale);
 
     if (profile.fireBias > 0.2 || context.projectileId === "ignite") {
       this.fireBurst(origin, 0.75 * particleScale + profile.fireBias);
@@ -682,6 +683,49 @@ export class ParticleSystem {
     }
   }
 
+  private spawnAftermathBloom(
+    origin: THREE.Vector3,
+    radius: number,
+    dustColor: THREE.Color,
+    smokeColor: THREE.Color,
+    intensity: number
+  ): void {
+    if (this.quality === "performance") {
+      return;
+    }
+    const amount = THREE.MathUtils.clamp(intensity, 0.45, 1.6) * (this.quality === "cinematic" ? 1.12 : 0.78);
+    const sheetCount = this.quality === "cinematic" ? 4 : 2;
+    this.spawnPressureWave(this.offsetOrigin(origin, 0, 0.01, 0), radius * 0.72, dustColor, 0.13, amount);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.08, 0), Math.round(30 * amount), dustColor, 1.85, 0.105, 3.6 * amount, 1.85, 0.48);
+
+    for (let i = 0; i < sheetCount; i += 1) {
+      const angle = (i / sheetCount) * Math.PI * 2 + THREE.MathUtils.randFloatSpread(0.5);
+      const distance = THREE.MathUtils.randFloat(radius * 0.06, radius * 0.22);
+      const angleCos = Math.cos(angle);
+      const angleSin = Math.sin(angle);
+      const offset = this.smokeOffset.set(angleCos * distance, THREE.MathUtils.randFloat(0.02, radius * 0.055), angleSin * distance);
+      const drift = this.smokeDrift.set(
+        angleCos * THREE.MathUtils.randFloat(0.03, 0.12),
+        THREE.MathUtils.randFloat(0.015, 0.055),
+        angleSin * THREE.MathUtils.randFloat(0.03, 0.12)
+      );
+      const startSize = THREE.MathUtils.randFloat(radius * 0.24, radius * 0.38);
+      this.spawnSprite(
+        this.offsetOrigin(origin, offset.x, offset.y, offset.z),
+        SMOKE_TEXTURE,
+        i % 2 === 0 ? dustColor : smokeColor,
+        startSize,
+        startSize * THREE.MathUtils.randFloat(3.4, 5.2),
+        THREE.MathUtils.randFloat(0.1, 0.17),
+        THREE.MathUtils.randFloat(3.1, 5.3),
+        THREE.MathUtils.randFloat(0.025, 0.085),
+        THREE.NormalBlending,
+        THREE.MathUtils.randFloat(0.55, 1.55),
+        drift
+      );
+    }
+  }
+
   private spawnPressureWave(
     origin: THREE.Vector3,
     radius: number,
@@ -726,6 +770,20 @@ export class ParticleSystem {
     blastDirection.normalize();
     this.spawnDirectionalBurst(origin, blastDirection, Math.round(52 * impactScale), profile.hotColor, 0.58, 0.034, 26 * impactScale, 0.52, 0.035, 0.44, THREE.AdditiveBlending);
     this.spawnDirectionalBurst(origin, blastDirection, Math.round(48 * impactScale), dustColor, 1.25, 0.09, 8.5 * impactScale, 1.55, 0.25, 0.62);
+    if (this.quality !== "performance") {
+      this.spawnDirectionalBurst(
+        this.offsetOrigin(origin, 0, 0.08, 0),
+        blastDirection,
+        Math.round(26 * impactScale),
+        dustColor,
+        1.65,
+        0.12,
+        5.8 * impactScale,
+        1.9,
+        0.42,
+        0.78
+      );
+    }
     this.spawnDirectionalStreaks(origin, blastDirection, radius * 1.22, profile.streakColor, Math.round(10 * impactScale), 0.42, 0.24);
   }
 

@@ -3276,17 +3276,34 @@ function roleRenderMaterial(materials: MaterialCatalog, materialId: MaterialId, 
     return existing;
   }
   const material = materials.getRenderMaterial(materialId).clone();
-  const tint = role === "target" ? new THREE.Color(0xff7a35) : null;
+  const tint = role === "target" ? targetTintForMaterial(materialId) : null;
   if (tint && (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshPhysicalMaterial || material instanceof THREE.MeshBasicMaterial)) {
-    material.color.lerp(tint, 0.58);
+    material.color.lerp(tint, 0.34);
     if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshPhysicalMaterial) {
-      material.emissive = tint.clone().multiplyScalar(0.12);
-      material.emissiveIntensity = 0.34;
+      material.emissive = tint.clone().multiplyScalar(0.08);
+      material.emissiveIntensity = 0.22;
     }
   }
   material.userData.sharedRoleRenderMaterial = true;
   roleRenderMaterialCache.set(cacheKey, material);
   return material;
+}
+
+function targetTintForMaterial(materialId: MaterialId): THREE.Color {
+  switch (materialId) {
+    case "glass":
+      return new THREE.Color(0xffa15d);
+    case "metal":
+      return new THREE.Color(0xffb65d);
+    case "concrete":
+      return new THREE.Color(0xd88951);
+    case "wood":
+      return new THREE.Color(0xff9b4f);
+    case "foam":
+      return new THREE.Color(0xffcf72);
+    case "rubber":
+      return new THREE.Color(0xff6a7d);
+  }
 }
 
 function shouldDisposeRenderMaterial(material: THREE.Material | THREE.Material[]): boolean {

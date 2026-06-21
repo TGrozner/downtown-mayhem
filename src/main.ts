@@ -257,6 +257,22 @@ interface DowntownMayhemRendererBundle {
   backend: ActualRendererBackend;
 }
 
+interface GraphicsLightingProfile {
+  background: THREE.ColorRepresentation;
+  fog: THREE.ColorRepresentation;
+  fogNear: number;
+  fogFar: number;
+  exposure: number;
+  ambientSky: THREE.ColorRepresentation;
+  ambientGround: THREE.ColorRepresentation;
+  ambientIntensity: number;
+  sunColor: THREE.ColorRepresentation;
+  sunIntensity: number;
+  skyFillColor: THREE.ColorRepresentation;
+  skyFillIntensity: number;
+  shadowMapSize: number;
+}
+
 declare global {
   interface Window {
     __DOWNTOWN_MAYHEM_DEBUG__?: DowntownMayhemDebugApi;
@@ -1920,7 +1936,9 @@ class Game {
   private readonly levelDecorations: THREE.Object3D[] = [];
   private readonly premiumSceneTextures: THREE.Texture[] = [];
   private renderWarmupGroup: THREE.Group | null = null;
+  private ambientLight: THREE.HemisphereLight | null = null;
   private sunKeyLight: THREE.DirectionalLight | null = null;
+  private skyFillLight: THREE.DirectionalLight | null = null;
   private readonly renderWarmupPersistentObjects: THREE.Object3D[] = [];
   private readonly handleResize = () => this.resize();
   private readonly handleBeforeUnload = () => this.input.dispose();
@@ -2453,6 +2471,7 @@ class Game {
 
   private configureLights(): void {
     const ambient = new THREE.HemisphereLight(0xc9efff, 0xe2c287, 0.84);
+    this.ambientLight = ambient;
     this.scene.add(ambient);
 
     const sunKey = new THREE.DirectionalLight(0xffedac, 3.15);
@@ -2470,7 +2489,38 @@ class Game {
 
     const skyFill = new THREE.DirectionalLight(0x9fdbff, 0.24);
     skyFill.position.set(7, 6, 8);
+    this.skyFillLight = skyFill;
     this.scene.add(skyFill);
+    this.applyGraphicsQualityLighting();
+  }
+
+  private applyGraphicsQualityLighting(): void {
+    const profile = graphicsLightingProfile(this.settings.graphicsQuality);
+    this.renderer.toneMappingExposure = profile.exposure;
+    if (this.scene.background instanceof THREE.Color) {
+      this.scene.background.set(profile.background);
+    } else {
+      this.scene.background = new THREE.Color(profile.background);
+    }
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color.set(profile.fog);
+      this.scene.fog.near = profile.fogNear;
+      this.scene.fog.far = profile.fogFar;
+    }
+    if (this.ambientLight) {
+      this.ambientLight.color.set(profile.ambientSky);
+      this.ambientLight.groundColor.set(profile.ambientGround);
+      this.ambientLight.intensity = profile.ambientIntensity;
+    }
+    if (this.sunKeyLight) {
+      this.sunKeyLight.color.set(profile.sunColor);
+      this.sunKeyLight.intensity = profile.sunIntensity;
+      this.sunKeyLight.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
+    }
+    if (this.skyFillLight) {
+      this.skyFillLight.color.set(profile.skyFillColor);
+      this.skyFillLight.intensity = profile.skyFillIntensity;
+    }
   }
 
   private buildArena(): void {
@@ -4508,6 +4558,7 @@ class Game {
     this.audio.setMasterVolume(this.settings.masterVolume);
     this.particles.setFlashScale(this.settings.motionEffects ? 1 : 0);
     this.particles.setQuality(this.settings.graphicsQuality);
+    this.applyGraphicsQualityLighting();
     this.renderer.shadowMap.enabled = this.settings.graphicsQuality === "cinematic";
     if (this.sunKeyLight) {
       this.sunKeyLight.castShadow = this.settings.graphicsQuality === "cinematic";
@@ -5499,6 +5550,59 @@ function scoreStatus(score: ScoreBreakdown, result: ArcadeResult): string {
 
 function settingsStatus(settings: GameSettings): string {
   return `${GRAPHICS_QUALITY_LABELS[settings.graphicsQuality]}, WebGL renderer, ${Math.round(settings.masterVolume * 100)}% volume, ${Math.round(settings.cameraShake * 100)}% shake`;
+}
+
+function graphicsLightingProfile(quality: GraphicsQuality): GraphicsLightingProfile {
+  switch (quality) {
+    case "performance":
+      return {
+        background: 0xa8dcff,
+        fog: 0xd9eef2,
+        fogNear: 66,
+        fogFar: 148,
+        exposure: 1.12,
+        ambientSky: 0xc9efff,
+        ambientGround: 0xe2c287,
+        ambientIntensity: 0.84,
+        sunColor: 0xffedac,
+        sunIntensity: 3.15,
+        skyFillColor: 0x9fdbff,
+        skyFillIntensity: 0.24,
+        shadowMapSize: 1536
+      };
+    case "balanced":
+      return {
+        background: 0xa6d9ff,
+        fog: 0xe6edf0,
+        fogNear: 62,
+        fogFar: 146,
+        exposure: 1.14,
+        ambientSky: 0xc2ecff,
+        ambientGround: 0xdabb86,
+        ambientIntensity: 0.8,
+        sunColor: 0xffe59b,
+        sunIntensity: 3.35,
+        skyFillColor: 0x8fd7ff,
+        skyFillIntensity: 0.28,
+        shadowMapSize: 1536
+      };
+    case "cinematic":
+      return {
+        background: 0x98d2ff,
+        fog: 0xf0e7d7,
+        fogNear: 58,
+        fogFar: 138,
+        exposure: 1.2,
+        ambientSky: 0xb7e7ff,
+        ambientGround: 0xd0a96d,
+        ambientIntensity: 0.72,
+        sunColor: 0xffda88,
+        sunIntensity: 3.85,
+        skyFillColor: 0x83ccff,
+        skyFillIntensity: 0.34,
+        shadowMapSize: 2048
+      };
+  }
 }
 
 boot().catch((error: unknown) => {
