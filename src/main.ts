@@ -18,11 +18,8 @@ import { InputController } from "./input";
 import { TEST_CHAMBERS, type TestChamber } from "./levels";
 import {
   chainMilestoneForCombo,
-  loadBestShotGhost,
   mayhemContractForRun,
   runVariantForSeed,
-  saveBestShotGhost,
-  type BestShotGhost,
   type MayhemContract,
   type RunVariant
 } from "./mayhemFeatures";
@@ -2092,15 +2089,6 @@ class Game {
     depthWrite: false
   });
   private readonly aimMarker = createAimMarker(this.aimMarkerMaterial);
-  private readonly bestShotGhostMarkerMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffd36d,
-    transparent: true,
-    opacity: 0.46,
-    side: THREE.DoubleSide,
-    depthTest: false,
-    depthWrite: false
-  });
-  private readonly bestShotGhostMarker = createAimMarker(this.bestShotGhostMarkerMaterial);
   private readonly arenaObjects: THREE.Object3D[] = [];
   private readonly cannonBatteryObjects: THREE.Object3D[] = [];
   private readonly levelDecorations: THREE.Object3D[] = [];
@@ -2131,9 +2119,7 @@ class Game {
   private runVariant: RunVariant = runVariantForSeed("hazard-junction", this.runSeed);
   private mayhemContract: MayhemContract | null = null;
   private shotMayhemContract: MayhemContract | null = null;
-  private bestShotGhost: BestShotGhost | null = null;
   private readonly chainMilestonesAwarded = new Set<number>();
-  private readonly shotAimPoint = DEFAULT_AIM_POINT.clone();
   private status = "Aim the siege cannon from the high battery.";
   private slowMotionTimer = 0;
   private hitStopTimer = 0;
@@ -2213,8 +2199,6 @@ class Game {
     this.aircraft = new AircraftController();
     this.scene.add(this.aircraft.getObject3D());
     this.scene.add(this.aimMarker);
-    this.bestShotGhostMarker.visible = false;
-    this.scene.add(this.bestShotGhostMarker);
     this.scorePopups = new ScorePopupLayer();
 
     this.ui = new GameUI({
@@ -2995,7 +2979,6 @@ class Game {
     this.runSeed = createRunSeed();
     this.rng.reset(this.runSeed);
     this.runVariant = runVariantForSeed(level.id, this.runSeed);
-    this.bestShotGhost = loadBestShotGhost(level.id);
     if (import.meta.env.DEV) {
       console.debug(`[Downtown Mayhem] run seed ${this.runSeed}`);
     }
@@ -3769,7 +3752,6 @@ class Game {
     this.clearProjectileSpectacleFocus();
     this.refreshRunPlanning();
     this.resetRunTelemetry();
-    this.shotAimPoint.copy(this.aimPoint);
     this.shotMayhemContract = this.mayhemContract;
     this.projectiles.launch(this.selectedProjectile, launchPosition, direction, this.sizeScale, this.powerScale);
     this.scoreTracker.beginShot(projectile);
@@ -3797,7 +3779,6 @@ class Game {
     }
     this.clearProjectileSpectacleFocus();
     this.resetRunTelemetry();
-    this.shotAimPoint.copy(this.aircraft.getObject3D().position);
     this.shotMayhemContract = this.mayhemContract;
     this.scoreTracker.beginShot(AIRCRAFT_CRASH_PROJECTILE);
     this.aircraftFlightStartedAt = performance.now();
@@ -3839,22 +3820,6 @@ class Game {
     this.arcadeProgress = recorded.progress;
     this.arcadeResult = recorded.result;
     const newBest = score.totalScore > previousBestScore;
-    if (newBest && this.gameMode === "cannon") {
-      this.bestShotGhost = {
-        version: 1,
-        levelId: level.id,
-        projectileId: this.selectedProjectile,
-        score: score.totalScore,
-        variantLabel: this.runVariant.label,
-        aimPoint: {
-          x: this.shotAimPoint.x,
-          y: this.shotAimPoint.y,
-          z: this.shotAimPoint.z
-        },
-        createdAt: Date.now()
-      };
-      saveBestShotGhost(this.bestShotGhost);
-    }
     this.arcadeResultMeta = {
       previousBestScore,
       previousStars,
@@ -4937,17 +4902,9 @@ class Game {
   private updateAimMarker(): void {
     const visible = this.gameMode === "cannon" && this.runState.phase === "aim";
     this.aimMarker.visible = visible;
-    this.bestShotGhostMarker.visible = visible && Boolean(this.bestShotGhost);
     this.renderer.domElement.classList.toggle("is-cannon-aim", visible);
     if (!visible) {
       return;
-    }
-    if (this.bestShotGhost) {
-      const ghostAim = this.bestShotGhost.aimPoint;
-      this.bestShotGhostMarker.position.set(ghostAim.x, Math.max(ghostAim.y, AIM_FALLBACK_SURFACE_Y), ghostAim.z);
-      this.bestShotGhostMarker.quaternion.setFromUnitVectors(AIM_SURFACE_NORMAL, AIM_SURFACE_NORMAL);
-      const ghostDistance = this.cameraRig.camera.position.distanceTo(this.bestShotGhostMarker.position);
-      this.bestShotGhostMarker.scale.setScalar(THREE.MathUtils.clamp(ghostDistance * 0.026, 0.7, 1.32));
     }
     this.aimMarker.position.copy(this.aimMarkerPoint).addScaledVector(this.aimSurfaceNormal, AIM_MARKER_SURFACE_OFFSET);
     this.aimMarker.quaternion.setFromUnitVectors(AIM_SURFACE_NORMAL, this.aimSurfaceNormal);

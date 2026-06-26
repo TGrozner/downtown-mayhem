@@ -3,8 +3,6 @@ import type { ArcadeMissionFields } from "./levels";
 import type { ProjectileId } from "./projectile";
 import type { ScoreBreakdown, ScoreEvent } from "./scoring";
 
-export const BEST_SHOT_GHOST_STORAGE_KEY = "downtown-mayhem:best-shot-ghosts-v1";
-
 export interface RunVariant {
   id: string;
   label: string;
@@ -46,16 +44,6 @@ export interface RunFeedback {
   variant: RunVariant;
   contract: MayhemContract | null;
   contractResult: ArcadeContractResult | null;
-}
-
-export interface BestShotGhost {
-  version: 1;
-  levelId: string;
-  projectileId: ProjectileId;
-  score: number;
-  variantLabel: string;
-  aimPoint: { x: number; y: number; z: number };
-  createdAt: number;
 }
 
 const RUN_VARIANTS: RunVariant[] = [
@@ -214,42 +202,6 @@ export function chainMilestoneForCombo(combo: number): { combo: number; label: s
   return null;
 }
 
-export function loadBestShotGhost(
-  levelId: string,
-  storage: Pick<Storage, "getItem"> | null = getLocalStorage()
-): BestShotGhost | null {
-  if (!storage) {
-    return null;
-  }
-  try {
-    const ghosts = normalizeGhostMap(JSON.parse(storage.getItem(BEST_SHOT_GHOST_STORAGE_KEY) ?? "{}"));
-    return ghosts[levelId] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveBestShotGhost(
-  ghost: BestShotGhost,
-  storage: Pick<Storage, "getItem" | "setItem"> | null = getLocalStorage()
-): boolean {
-  if (!storage) {
-    return false;
-  }
-  try {
-    const ghosts = normalizeGhostMap(JSON.parse(storage.getItem(BEST_SHOT_GHOST_STORAGE_KEY) ?? "{}"));
-    const previous = ghosts[ghost.levelId];
-    if (previous && previous.score >= ghost.score) {
-      return true;
-    }
-    ghosts[ghost.levelId] = ghost;
-    storage.setItem(BEST_SHOT_GHOST_STORAGE_KEY, JSON.stringify(ghosts));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function districtContractMetric(variant: RunVariant, projectileId: ProjectileId): ArcadeContractObjective["metric"] {
   if (variant.id === "heavy-salvage" || projectileId === "gravity") {
     return "targetDamage";
@@ -337,56 +289,4 @@ function hashString(value: string): number {
     hash = Math.imul(hash, 16777619);
   }
   return Math.abs(hash);
-}
-
-function normalizeGhostMap(value: unknown): Record<string, BestShotGhost> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const ghosts: Record<string, BestShotGhost> = {};
-  for (const [levelId, ghost] of Object.entries(value)) {
-    if (!isRecord(ghost) || ghost.version !== 1 || ghost.levelId !== levelId) {
-      continue;
-    }
-    if (!isProjectileId(ghost.projectileId) || !isRecord(ghost.aimPoint)) {
-      continue;
-    }
-    const x = toFiniteNumber(ghost.aimPoint.x);
-    const y = toFiniteNumber(ghost.aimPoint.y);
-    const z = toFiniteNumber(ghost.aimPoint.z);
-    const score = toFiniteNumber(ghost.score);
-    if (x === null || y === null || z === null || score === null) {
-      continue;
-    }
-    ghosts[levelId] = {
-      version: 1,
-      levelId,
-      projectileId: ghost.projectileId,
-      score,
-      variantLabel: typeof ghost.variantLabel === "string" ? ghost.variantLabel : "Best run",
-      aimPoint: { x, y, z },
-      createdAt: toFiniteNumber(ghost.createdAt) ?? Date.now()
-    };
-  }
-  return ghosts;
-}
-
-function isProjectileId(value: unknown): value is ProjectileId {
-  return value === "slug" || value === "scatter" || value === "pulse" || value === "gravity" || value === "ignite";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function toFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function getLocalStorage(): Storage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
 }
