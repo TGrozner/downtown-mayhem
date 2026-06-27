@@ -122,7 +122,7 @@ const RENDER_WARMUP_MAX_DURATION_MS = 6_000;
 const RENDER_WARMUP_POST_CLEANUP_MAX_DURATION_MS = 3_000;
 const RENDER_WARMUP_SYNTHETIC_ORIGIN = new THREE.Vector3(72, 1.2, 72);
 const RENDER_WARMUP_SYNTHETIC_DESTRUCTION_ZONE = "render-warmup-destruction";
-const AIM_TRAFFIC_STEP_SECONDS = 1 / 12;
+const AIM_TRAFFIC_STEP_SECONDS = 1 / 24;
 const AIM_TRAFFIC_MAX_ACCUMULATED_SECONDS = 0.12;
 const DAY_SKY_RADIUS = 118;
 const SUN_DIRECTION = new THREE.Vector3(-0.28, 0.28, -0.92).normalize();
@@ -2441,6 +2441,7 @@ class Game {
           this.aimTrafficAccumulator = 0;
           this.physics.advanceTrafficRoutes(trafficDelta);
         }
+        this.physics.updateTrafficVisuals(delta);
         perfMonitor.addTiming("physics.traffic", startedAt);
       }
       if (this.runState.phase !== "aim") {

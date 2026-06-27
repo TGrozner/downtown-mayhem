@@ -157,6 +157,7 @@ export interface PhysicsObject {
   chainSource: boolean;
   shape: PhysicsShape;
   trafficRoute?: TrafficRoute;
+  trafficVisualState?: TrafficVisualState;
   colliderHandles: number[];
   releaseMesh?: MeshReleaseCallback;
   visualProxy?: DynamicVisualProxy;
@@ -183,6 +184,15 @@ interface TrafficAdvancePlan {
   maxZ: number;
   priority: number;
   blocked: boolean;
+}
+
+interface TrafficVisualState {
+  fromPosition: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  fromRotation: THREE.Quaternion;
+  toRotation: THREE.Quaternion;
+  elapsed: number;
+  duration: number;
 }
 
 interface SupportReleaseConfig {
@@ -401,6 +411,8 @@ export class PhysicsWorld {
   private readonly trafficComparedPlanPairs = new Set<number>();
   private readonly trafficApplyRotation = new THREE.Quaternion();
   private readonly trafficApplyVelocity = new THREE.Vector3();
+  private readonly trafficSyncPosition = new THREE.Vector3();
+  private readonly trafficSyncRotation = new THREE.Quaternion();
   private readonly preStepVelocities = new Map<number, MotionSample>();
   private readonly preStepVelocitySamples = new Map<number, MotionSample>();
   private readonly surfaceColliderLabels = new Map<number, string>();
@@ -676,6 +688,7 @@ export class PhysicsWorld {
       chainSource,
       shape: "box",
       trafficRoute: options.trafficRoute ? { ...options.trafficRoute } : undefined,
+      trafficVisualState: options.trafficRoute ? createTrafficVisualState(options.position, rotation) : undefined,
       colliderHandles,
       releaseMesh: options.releaseMesh,
       visualProxy: options.visualProxy
@@ -1141,13 +1154,32 @@ export class PhysicsWorld {
     this.resolveTrafficPlans(plans);
     for (const plan of plans) {
       if (plan.blocked) {
-        holdTrafficBodyTransform(plan.object);
+        holdTrafficBodyTransform(plan.object, deltaSeconds);
         this.trafficWaitTicks.set(plan.object.id, (this.trafficWaitTicks.get(plan.object.id) ?? 0) + 1);
       } else {
         copyTrafficRouteState(plan.route, plan.proposedRoute);
-        applyTrafficBodyTransform(plan.object, plan.proposed, plan.route, this.trafficApplyRotation, this.trafficApplyVelocity);
+        applyTrafficBodyTransform(plan.object, plan.proposed, plan.route, this.trafficApplyRotation, this.trafficApplyVelocity, deltaSeconds);
         this.trafficWaitTicks.delete(plan.object.id);
       }
+    }
+  }
+
+  updateTrafficVisuals(deltaSeconds: number): void {
+    if (deltaSeconds <= 0 || this.trafficObjectIds.size === 0) {
+      return;
+    }
+    for (const id of this.trafficObjectIds) {
+      const object = this.objects.get(id);
+      const state = object?.trafficVisualState;
+      if (!object || !state) {
+        continue;
+      }
+      state.elapsed = Math.min(state.duration, state.elapsed + deltaSeconds);
+      const t = state.duration > 0 ? THREE.MathUtils.clamp(state.elapsed / state.duration, 0, 1) : 1;
+      this.trafficSyncPosition.lerpVectors(state.fromPosition, state.toPosition, t);
+      this.trafficSyncRotation.slerpQuaternions(state.fromRotation, state.toRotation, t);
+      object.mesh.position.copy(this.trafficSyncPosition);
+      object.mesh.quaternion.copy(this.trafficSyncRotation);
     }
   }
 
@@ -2331,7 +2363,8 @@ function applyTrafficBodyTransform(
   position: THREE.Vector3,
   route: TrafficRoute,
   rotation: THREE.Quaternion,
-  velocity: THREE.Vector3
+  velocity: THREE.Vector3,
+  visualDuration: number
 ): void {
   const waypointDirection = trafficWaypointDirection(route);
   if (waypointDirection) {
@@ -2347,18 +2380,50 @@ function applyTrafficBodyTransform(
   object.body.setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w }, true);
   object.body.setLinvel({ x: velocity.x, y: 0, z: velocity.z }, true);
   object.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-  object.mesh.position.copy(position);
-  object.mesh.quaternion.copy(rotation);
+  scheduleTrafficVisualTransform(object, position, rotation, visualDuration);
 }
 
-function holdTrafficBodyTransform(object: PhysicsObject): void {
+function holdTrafficBodyTransform(object: PhysicsObject, visualDuration: number): void {
   const translation = object.body.translation();
   const rotation = object.body.rotation();
   object.body.wakeUp();
   object.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
   object.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-  object.mesh.position.set(translation.x, translation.y, translation.z);
-  object.mesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+  scheduleTrafficVisualTransform(
+    object,
+    new THREE.Vector3(translation.x, translation.y, translation.z),
+    new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
+    visualDuration
+  );
+}
+
+function createTrafficVisualState(position: THREE.Vector3, rotation: THREE.Quaternion): TrafficVisualState {
+  return {
+    fromPosition: position.clone(),
+    toPosition: position.clone(),
+    fromRotation: rotation.clone(),
+    toRotation: rotation.clone(),
+    elapsed: 1,
+    duration: 1
+  };
+}
+
+function scheduleTrafficVisualTransform(
+  object: PhysicsObject,
+  position: THREE.Vector3,
+  rotation: THREE.Quaternion,
+  duration: number
+): void {
+  if (!object.trafficVisualState) {
+    object.trafficVisualState = createTrafficVisualState(object.mesh.position, object.mesh.quaternion);
+  }
+  const state = object.trafficVisualState;
+  state.fromPosition.copy(object.mesh.position);
+  state.fromRotation.copy(object.mesh.quaternion);
+  state.toPosition.copy(position);
+  state.toRotation.copy(rotation);
+  state.elapsed = 0;
+  state.duration = THREE.MathUtils.clamp(duration, 1 / 60, 1 / 18);
 }
 
 function routeCoordinate(position: THREE.Vector3, axis: TrafficAxis): number {
