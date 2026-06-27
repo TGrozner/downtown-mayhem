@@ -36,12 +36,14 @@ const HAZARD_JUNCTION_RENDER_BUDGET = {
   visibleMaterials: 340,
   programs: 30,
   geometries: 1_780,
-  textures: 36
+  textures: 42
 };
 const PERF_SMOKE_BUDGET = {
   maxFrameMs: 360,
   shotMaxFrameMs: 280,
   slowRatioPercent: 35,
+  maxPostShotDrawCalls: 5_200,
+  maxPostShotTextures: 50,
   maxProgramsCreatedAfterWarmup: 2,
   maxDroppedSubsteps: 8,
   maxVisiblePooledVfxObjects: 0
@@ -449,6 +451,8 @@ function expectPerfBudget(payload: PerfLogPayload, options: { checkSlowRatio?: b
     expect(payload.summary.slowRatioPercent).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.slowRatioPercent);
   }
   expect(payload.summary.shotTotals.droppedSubsteps).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.maxDroppedSubsteps);
+  expect(payload.stats.drawCalls).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.maxPostShotDrawCalls);
+  expect(payload.stats.textures).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.maxPostShotTextures);
   expect(payload.warmup.phase).toBe("ready");
   expect(payload.stats.visiblePooledVfxObjects).toBeLessThanOrEqual(PERF_SMOKE_BUDGET.maxVisiblePooledVfxObjects);
   expect(payload.report?.counterTotals["renderer.programsCreatedAfterWarmup"] ?? 0).toBeLessThanOrEqual(

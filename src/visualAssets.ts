@@ -5,7 +5,11 @@ export type GraphicAssetId =
   | "arenaWall"
   | "cannonDeck"
   | "decalAtlas"
-  | "materialAtlas";
+  | "materialAtlas"
+  | "vfxExplosionAtlas"
+  | "vfxExplosionNoFireAtlas"
+  | "vfxFireballAtlas"
+  | "vfxSmokeAtlas";
 
 interface GraphicAssetPath {
   webp: string;
@@ -32,6 +36,22 @@ const GRAPHIC_ASSET_PATHS: Record<GraphicAssetId, GraphicAssetPath> = {
   materialAtlas: {
     webp: "assets/graphics/generated/premium-material-atlas.webp",
     fallback: "assets/graphics/premium-material-atlas.png"
+  },
+  vfxExplosionAtlas: {
+    webp: "assets/graphics/vfx/unity-explosion01-5x5.webp",
+    fallback: "assets/graphics/vfx/unity-explosion01-5x5.webp"
+  },
+  vfxExplosionNoFireAtlas: {
+    webp: "assets/graphics/vfx/unity-explosion01-nofire-5x5.webp",
+    fallback: "assets/graphics/vfx/unity-explosion01-nofire-5x5.webp"
+  },
+  vfxFireballAtlas: {
+    webp: "assets/graphics/vfx/unity-fireball02-8x8.webp",
+    fallback: "assets/graphics/vfx/unity-fireball02-8x8.webp"
+  },
+  vfxSmokeAtlas: {
+    webp: "assets/graphics/vfx/unity-wispy-smoke01-8x8.webp",
+    fallback: "assets/graphics/vfx/unity-wispy-smoke01-8x8.webp"
   }
 };
 
@@ -73,6 +93,10 @@ export function graphicTexture(id: GraphicAssetId, options: TextureOptions = {})
   const texture = createManagedTexture(id, options);
   textureCache.set(cacheKey, texture);
   return texture;
+}
+
+export function uniqueGraphicTexture(id: GraphicAssetId, options: TextureOptions = {}): THREE.Texture {
+  return createManagedTexture(id, options);
 }
 
 export function materialAtlasTile(tileIndex: number): THREE.Texture {

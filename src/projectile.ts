@@ -43,7 +43,7 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     key: "1",
     name: "Normal Shell",
     shortName: "Normal",
-    role: "Balanced blast",
+    role: "Classic fireball",
     color: new THREE.Color(0x9fb7c8),
     materialId: "metal",
     baseRadius: 0.24,
@@ -53,14 +53,14 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     blastRadius: 3.35,
     fractureBoost: 1.24,
     scoreModifier: 1.05,
-    description: "Standard cannon shell with a readable medium explosion."
+    description: "Classic orange-white BOOM with a hard shock ring and clean debris shove."
   },
   scatter: {
     id: "scatter",
     key: "2",
     name: "Fragmentation Cluster",
     shortName: "Frag",
-    role: "Chain starter",
+    role: "Shrapnel pops",
     color: new THREE.Color(0xffc961),
     materialId: "foam",
     baseRadius: 0.26,
@@ -70,14 +70,14 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     blastRadius: 2.75,
     fractureBoost: 0.82,
     scoreModifier: 1.2,
-    description: "Weak first hit that seeds explosive clusters around the impact."
+    description: "Golden fragmentation burst that scatters shard streaks and chained mini-pops."
   },
   pulse: {
     id: "pulse",
     key: "3",
     name: "Impulse Orb",
     shortName: "Impulse",
-    role: "Wide shove",
+    role: "Cyan shockwave",
     color: new THREE.Color(0x61f4ff),
     materialId: "glass",
     baseRadius: 0.31,
@@ -87,14 +87,14 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     blastRadius: 7.8,
     fractureBoost: 0.72,
     scoreModifier: 1.12,
-    description: "Large pressure radius with low destructive force outside the core."
+    description: "Wide cyan pressure dome with electric rings and a lower-fire shove."
   },
   gravity: {
     id: "gravity",
     key: "4",
     name: "Heavy Penetrator",
     shortName: "Heavy",
-    role: "Pierces structures",
+    role: "Purple crush",
     color: new THREE.Color(0x9c71ff),
     materialId: "metal",
     baseRadius: 0.4,
@@ -104,7 +104,7 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     blastRadius: 0.8,
     fractureBoost: 1.35,
     scoreModifier: 1.22,
-    description: "Dense penetrator that punches through solid buildings without exploding."
+    description: "Dense penetrator that punches through buildings with a violet crush shock."
   },
   ignite: {
     id: "ignite",

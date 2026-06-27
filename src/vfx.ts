@@ -4,6 +4,7 @@ import type { MaterialId } from "./materialCatalog";
 import { perfMonitor } from "./perf";
 import type { ProjectileId } from "./projectile";
 import type { GraphicsQuality } from "./settings";
+import { uniqueGraphicTexture, type GraphicAssetId } from "./visualAssets";
 
 interface ParticleBurst {
   points: THREE.Points;
@@ -29,6 +30,7 @@ interface FxSprite {
   material: THREE.SpriteMaterial;
   textureKind: string;
   blending: THREE.Blending;
+  flipbook?: FlipbookState;
   life: number;
   maxLife: number;
   maxOpacity: number;
@@ -36,9 +38,41 @@ interface FxSprite {
   endSize: number;
   aspect: number;
   rise: number;
+  delay: number;
+  fadeIn: number;
   velocity: THREE.Vector3;
   rotationSpeed: number;
 }
+
+interface FlipbookState {
+  assetId: Extract<GraphicAssetId, "vfxExplosionAtlas" | "vfxExplosionNoFireAtlas" | "vfxFireballAtlas" | "vfxSmokeAtlas">;
+  columns: number;
+  rows: number;
+  frameCount: number;
+  startFrame: number;
+  frameSpan: number;
+  loop: boolean;
+  randomStart: boolean;
+}
+
+type FlipbookOptions = Partial<Pick<FlipbookState, "startFrame" | "frameSpan" | "loop" | "randomStart">> & {
+  color?: THREE.ColorRepresentation;
+  delay?: number;
+  fadeIn?: number;
+};
+
+interface SpriteOptions {
+  delay?: number;
+  fadeIn?: number;
+}
+
+interface CompositionProfile {
+  fire: number;
+  smoke: number;
+  streaks: number;
+  materialResponses: number;
+  overlayMax: number;
+};
 
 interface StreakBurst {
   lines: THREE.LineSegments;
@@ -123,12 +157,39 @@ const WARMUP_PROJECTILE_COLORS: Record<ProjectileId, THREE.ColorRepresentation> 
   gravity: 0x9c71ff,
   ignite: 0xff7a35
 };
+const VFX_FLIPBOOK_TEXTURE_KIND = "flipbook";
+const VFX_FLIPBOOK_PROFILES = {
+  explosion: {
+    assetId: "vfxExplosionAtlas",
+    columns: 5,
+    rows: 5,
+    frameCount: 25
+  },
+  dustShell: {
+    assetId: "vfxExplosionNoFireAtlas",
+    columns: 5,
+    rows: 5,
+    frameCount: 25
+  },
+  fireball: {
+    assetId: "vfxFireballAtlas",
+    columns: 8,
+    rows: 8,
+    frameCount: 64
+  },
+  smoke: {
+    assetId: "vfxSmokeAtlas",
+    columns: 8,
+    rows: 8,
+    frameCount: 64
+  }
+} as const satisfies Record<string, Pick<FlipbookState, "assetId" | "columns" | "rows" | "frameCount">>;
 
 export class ParticleSystem {
-  private static readonly maxBursts = 24;
-  private static readonly maxSprites = 48;
-  private static readonly maxStreaks = 14;
-  private static readonly maxPressureWaves = 8;
+  private static readonly maxBursts = 32;
+  private static readonly maxSprites = 72;
+  private static readonly maxStreaks = 18;
+  private static readonly maxPressureWaves = 10;
   private static readonly maxBurstPool = 96;
   private static readonly maxSpritePool = 384;
   private static readonly maxStreakPool = 32;
@@ -199,6 +260,7 @@ export class ParticleSystem {
         this.ensureWarmupSprites(textureKind, blending, objects);
       }
     }
+    this.ensureWarmupFlipbookTextures(objects);
     this.ensureWarmupStreaks(objects);
     this.ensureWarmupPressureWaves(objects);
     return objects;
@@ -407,9 +469,30 @@ export class ParticleSystem {
     }
   }
 
+  private ensureWarmupFlipbookTextures(objects: THREE.Object3D[]): void {
+    const profiles = [
+      VFX_FLIPBOOK_PROFILES.explosion,
+      VFX_FLIPBOOK_PROFILES.dustShell,
+      VFX_FLIPBOOK_PROFILES.fireball,
+      VFX_FLIPBOOK_PROFILES.smoke
+    ];
+    for (let index = 0; index < profiles.length; index += 1) {
+      const profile = profiles[index];
+      const sprite = this.createFlipbookSprite(profile.assetId);
+      configureFlipbookMap(sprite.material.map, profile.columns, profile.rows, Math.min(index * 3, profile.frameCount - 1));
+      sprite.sprite.position.set(-0.85 + index * 0.26, VFX_POOL_PARK_Y, 0);
+      sprite.sprite.scale.set(0.08, 0.08, 1);
+      sprite.sprite.visible = true;
+      sprite.sprite.frustumCulled = false;
+      objects.push(sprite.sprite);
+      this.spritePool.push(sprite);
+    }
+  }
+
   explode(origin: THREE.Vector3, radius: number, dustColors: THREE.Color[], context: ExplosionFxContext = {}): void {
     const startedAt = perfMonitor.timeStart();
     const profile = explosionProfile(context.projectileId, context.hitMaterialId);
+    const composition = this.explosionComposition(context);
     const impactScale = this.explosionScale(context);
     const particleScale = impactScale * this.explosionParticleDensity(context);
     const visualRadius = radius * THREE.MathUtils.clamp(0.95 + impactScale * 0.08 + profile.shockBias * 0.08, 0.9, 1.28);
@@ -419,32 +502,70 @@ export class ParticleSystem {
 
     this.flashLight.position.copy(origin);
     this.flashLight.color.set(profile.coreColor);
-    this.flashLight.distance = THREE.MathUtils.clamp(visualRadius * 4.8, 12, 42);
-    this.flashLight.intensity = THREE.MathUtils.clamp(46 * impactScale, 24, 110) * this.flashScale;
-    this.setFlashOverlay(profile, impactScale);
+    this.flashLight.distance = THREE.MathUtils.clamp(visualRadius * (5.4 + profile.shockBias * 1.2), 14, 58);
+    this.flashLight.intensity =
+      THREE.MathUtils.clamp(56 * impactScale * (1 + profile.fireBias * 0.18 + profile.shockBias * 0.12), 30, 145) * this.flashScale;
+    this.setFlashOverlay(profile, impactScale, composition.overlayMax);
 
-    this.spawnSprite(coreOrigin, CORE_TEXTURE, profile.coreColor, visualRadius * 0.34, visualRadius * 1.15, 0.74, 0.34, 0.42, THREE.AdditiveBlending);
-    this.spawnSprite(this.offsetOrigin(coreOrigin, 0, 0.16, 0), CORE_TEXTURE, profile.edgeColor, visualRadius * 0.16, visualRadius * 0.9, 0.34, 0.42, 0.16, THREE.AdditiveBlending);
+    const shockOnlyGlowScale = context.projectileId === "pulse" ? 0.58 : 1;
+    const shockOnlySizeScale = context.projectileId === "pulse" ? 0.82 : 1;
+    this.spawnSprite(
+      coreOrigin,
+      CORE_TEXTURE,
+      profile.coreColor,
+      visualRadius * 0.28 * shockOnlySizeScale,
+      visualRadius * 1.06 * shockOnlySizeScale,
+      0.42 * shockOnlyGlowScale,
+      0.26,
+      0.34,
+      THREE.AdditiveBlending
+    );
+    this.spawnSprite(
+      this.offsetOrigin(coreOrigin, 0, 0.16, 0),
+      CORE_TEXTURE,
+      profile.edgeColor,
+      visualRadius * 0.24 * shockOnlySizeScale,
+      visualRadius * 1.22 * shockOnlySizeScale,
+      0.34 * shockOnlyGlowScale,
+      0.46,
+      0.24,
+      THREE.AdditiveBlending
+    );
+    this.spawnSprite(
+      this.offsetOrigin(coreOrigin, 0, 0.32, 0),
+      CORE_TEXTURE,
+      profile.hotColor,
+      visualRadius * 0.18 * shockOnlySizeScale,
+      visualRadius * 1.44 * shockOnlySizeScale,
+      0.28 * shockOnlyGlowScale,
+      0.56,
+      0.48,
+      THREE.AdditiveBlending,
+      1.25
+    );
+    this.spawnImpactPunch(origin, coreOrigin, visualRadius, profile, dustColor, context, impactScale);
+    this.spawnBoomFireball(origin, coreOrigin, visualRadius, profile, context, impactScale);
+    this.spawnRollingExplosionCloud(origin, coreOrigin, visualRadius, smokeColor, dustColor, context, impactScale);
 
-    const fireAmount = particleScale * (0.75 + profile.fireBias);
-    const smokeAmount = particleScale * (0.8 + profile.smokeBias);
-    const streakAmount = particleScale * (0.85 + profile.streakBias);
-    this.spawnBurst(origin, Math.round(108 * fireAmount), profile.hotColor, 0.82, 0.052, 17 * impactScale, 0.82, 0.06, THREE.AdditiveBlending);
-    this.spawnBurst(origin, Math.round(58 * fireAmount), profile.coreColor, 0.48, 0.038, 22 * impactScale, 0.5, 0.04, THREE.AdditiveBlending);
-    this.spawnBurst(origin, Math.round(42 * streakAmount), profile.emberColor, 0.5, 0.026, 31 * impactScale, 0.74, 0.03, THREE.AdditiveBlending);
+    const fireAmount = particleScale * (0.75 + profile.fireBias) * composition.fire;
+    const smokeAmount = particleScale * (0.8 + profile.smokeBias) * composition.smoke;
+    const streakAmount = particleScale * (0.85 + profile.streakBias) * composition.streaks;
+    this.spawnBurst(origin, Math.round(142 * fireAmount), profile.hotColor, 0.92, 0.06, 21 * impactScale, 0.78, 0.055, THREE.AdditiveBlending);
+    this.spawnBurst(origin, Math.round(82 * fireAmount), profile.coreColor, 0.56, 0.042, 27 * impactScale, 0.46, 0.035, THREE.AdditiveBlending);
+    this.spawnBurst(origin, Math.round(52 * streakAmount), profile.emberColor, 0.52, 0.026, 34 * impactScale, 0.74, 0.03, THREE.AdditiveBlending);
     this.spawnBurst(origin, Math.round(92 * smokeAmount), dustColor, 1.38, 0.075, 4.6 * impactScale, 1.55, 0.32);
     this.spawnBurst(coreOrigin, Math.round(64 * smokeAmount), smokeColor, 2.25, 0.13, 2.5 * impactScale, 1.05, 0.55);
-    this.spawnPressureWave(origin, visualRadius, profile.shockColor, context.role === "primary" ? 0.5 : 0.34, impactScale);
+    this.spawnPressureWave(origin, visualRadius * (1.04 + profile.shockBias * 0.18), profile.shockColor, context.role === "primary" ? 0.58 : 0.38, impactScale);
     this.spawnDirectionalBlast(origin, normalizedImpactDirectionInto(this.responseDirection, context.impactDirection), visualRadius, profile, dustColor, particleScale);
     this.spawnStreaks(origin, visualRadius, profile.streakColor, Math.round(14 * streakAmount), 0.52);
     this.spawnSmokePuffs(coreOrigin, visualRadius, smokeColor, smokeAmount);
     this.spawnAftermathBloom(origin, visualRadius, dustColor, smokeColor, particleScale);
 
-    if (profile.fireBias > 0.2 || context.projectileId === "ignite") {
-      this.fireBurst(origin, 0.75 * particleScale + profile.fireBias);
+    if (profile.fireBias > 0.08 || context.projectileId === "ignite" || context.projectileId === "slug" || context.projectileId === "scatter") {
+      this.fireBurst(origin, 1.15 * particleScale + profile.fireBias);
     }
     this.spawnProjectileSignature(origin, coreOrigin, visualRadius, profile, context, particleScale);
-    this.spawnMaterialResponse(origin, visualRadius, context, profile, dustColor, particleScale);
+    this.spawnMaterialResponse(origin, visualRadius, context, profile, dustColor, particleScale, composition);
     perfMonitor.addTiming("vfx.explode", startedAt);
   }
 
@@ -474,18 +595,19 @@ export class ParticleSystem {
   }
 
   fireBurst(origin: THREE.Vector3, intensity = 1): void {
-    const amount = THREE.MathUtils.clamp(intensity, 0.35, 2.2);
-    this.spawnSprite(this.offsetOrigin(origin, 0, 0.45, 0), CORE_TEXTURE, 0xff8f38, 0.38 * amount, 1.5 * amount, 0.5, 0.32, 0.38, THREE.AdditiveBlending);
-    this.spawnBurst(this.offsetOrigin(origin, 0, 0.28, 0), Math.round(48 * amount), 0xff7a35, 0.62, 0.075, 6.8 * amount, 0.28, 0.14, THREE.AdditiveBlending);
-    this.spawnBurst(this.offsetOrigin(origin, 0, 0.48, 0), Math.round(30 * amount), 0xffd15c, 0.42, 0.045, 5.2 * amount, 0.2, 0.08, THREE.AdditiveBlending);
-    this.spawnBurst(this.offsetOrigin(origin, 0, 0.32, 0), Math.round(34 * amount), 0x1d1b19, 1.45, 0.12, 2.2 * amount, -0.18, 0.48);
+    const amount = THREE.MathUtils.clamp(intensity, 0.35, 3.2);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.45, 0), CORE_TEXTURE, 0xff8f38, 0.46 * amount, 2.05 * amount, 0.64, 0.46, 0.55, THREE.AdditiveBlending);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.82, 0), CORE_TEXTURE, 0xffd15c, 0.18 * amount, 1.25 * amount, 0.36, 0.58, 0.86, THREE.AdditiveBlending, 0.72);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.28, 0), Math.round(64 * amount), 0xff7a35, 0.72, 0.075, 8.8 * amount, 0.22, 0.12, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.48, 0), Math.round(42 * amount), 0xffd15c, 0.52, 0.045, 7.2 * amount, 0.16, 0.07, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.32, 0), Math.round(48 * amount), 0x1d1b19, 1.75, 0.12, 2.8 * amount, -0.18, 0.44);
   }
 
   fireLick(origin: THREE.Vector3, intensity = 1): void {
-    const amount = THREE.MathUtils.clamp(intensity, 0.25, 1.4);
-    this.spawnSprite(this.offsetOrigin(origin, 0, 0.36, 0), CORE_TEXTURE, 0xff7a35, 0.16 * amount, 0.72 * amount, 0.36, 0.24, 0.28, THREE.AdditiveBlending);
-    this.spawnBurst(this.offsetOrigin(origin, 0, 0.34, 0), Math.round(16 * amount), 0xff8f38, 0.36, 0.055, 3.8 * amount, 0.15, 0.12, THREE.AdditiveBlending);
-    this.spawnBurst(this.offsetOrigin(origin, 0, 0.48, 0), Math.round(10 * amount), 0x2d2824, 0.95, 0.1, 1.5 * amount, -0.12, 0.44);
+    const amount = THREE.MathUtils.clamp(intensity, 0.25, 2.1);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.36, 0), CORE_TEXTURE, 0xff7a35, 0.2 * amount, 0.96 * amount, 0.42, 0.32, 0.42, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.34, 0), Math.round(22 * amount), 0xff8f38, 0.42, 0.055, 4.8 * amount, 0.1, 0.1, THREE.AdditiveBlending);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.48, 0), Math.round(14 * amount), 0x2d2824, 1.15, 0.1, 1.8 * amount, -0.12, 0.4);
   }
 
   armingPulse(origin: THREE.Vector3, intensity = 1, color: THREE.ColorRepresentation = 0xff9a42): void {
@@ -531,7 +653,14 @@ export class ParticleSystem {
     for (let i = this.sprites.length - 1; i >= 0; i -= 1) {
       const sprite = this.sprites[i];
       sprite.life += deltaSeconds;
-      const t = sprite.life / sprite.maxLife;
+      const activeLife = sprite.life - sprite.delay;
+      if (activeLife < 0) {
+        sprite.sprite.visible = false;
+        sprite.material.opacity = 0;
+        continue;
+      }
+      sprite.sprite.visible = true;
+      const t = activeLife / sprite.maxLife;
       if (t >= 1) {
         this.retireSpriteAt(i);
         continue;
@@ -541,7 +670,11 @@ export class ParticleSystem {
       sprite.sprite.position.y += sprite.rise * deltaSeconds;
       sprite.sprite.position.addScaledVector(sprite.velocity, deltaSeconds);
       sprite.material.rotation += sprite.rotationSpeed * deltaSeconds;
-      sprite.material.opacity = sprite.maxOpacity * (1 - t) ** 1.65;
+      if (sprite.flipbook) {
+        updateFlipbookSprite(sprite, t);
+      }
+      const fadeIn = sprite.fadeIn > 0 ? THREE.MathUtils.clamp(activeLife / sprite.fadeIn, 0, 1) : 1;
+      sprite.material.opacity = sprite.maxOpacity * fadeIn * (1 - t) ** 1.65;
     }
 
     for (let i = this.streaks.length - 1; i >= 0; i -= 1) {
@@ -591,19 +724,22 @@ export class ParticleSystem {
     rise: number,
     blending: THREE.Blending = THREE.NormalBlending,
     aspect = 1,
-    velocity?: THREE.Vector3
+    velocity?: THREE.Vector3,
+    options: SpriteOptions = {}
   ): void {
     if (this.sprites.length >= ParticleSystem.maxSprites) {
       this.retireReusableSprite(textureKind, blending);
     }
+    const delay = options.delay ?? 0;
+    const fadeIn = options.fadeIn ?? 0;
     const fx = this.acquireSprite(textureKind, blending);
     fx.material.color.set(color);
-    fx.material.opacity = opacity;
+    fx.material.opacity = delay > 0 || fadeIn > 0 ? 0 : opacity;
     fx.material.rotation = 0;
     fx.sprite.position.copy(origin);
     fx.sprite.scale.set(startSize, startSize, 1);
     fx.sprite.renderOrder = blending === THREE.AdditiveBlending ? 8 : 5;
-    fx.sprite.visible = true;
+    fx.sprite.visible = delay <= 0;
     fx.sprite.frustumCulled = false;
     fx.life = 0;
     fx.maxLife = maxLife;
@@ -612,11 +748,73 @@ export class ParticleSystem {
     fx.endSize = endSize;
     fx.aspect = aspect;
     fx.rise = rise;
+    fx.delay = delay;
+    fx.fadeIn = fadeIn;
     fx.velocity.copy(velocity ?? ZERO_VECTOR);
     fx.rotationSpeed = THREE.MathUtils.randFloat(-1.8, 1.8);
     addToSceneIfNeeded(this.scene, fx.sprite);
     this.sprites.push(fx);
     perfMonitor.addCount("vfx.spritesSpawned");
+    this.trimSprites();
+  }
+
+  private spawnFlipbookSprite(
+    origin: THREE.Vector3,
+    profile: Pick<FlipbookState, "assetId" | "columns" | "rows" | "frameCount">,
+    startSize: number,
+    endSize: number,
+    opacity: number,
+    maxLife: number,
+    rise: number,
+    blending: THREE.Blending = THREE.AdditiveBlending,
+    aspect = 1,
+    velocity?: THREE.Vector3,
+    options: FlipbookOptions = {}
+  ): void {
+    while (this.countActiveFlipbookSprites(profile.assetId, blending) >= this.flipbookActiveLimit(profile.assetId, blending)) {
+      if (!this.retireOldestFlipbookSprite(profile.assetId, blending)) {
+        break;
+      }
+    }
+    if (this.sprites.length >= ParticleSystem.maxSprites) {
+      this.retireReusableSprite(VFX_FLIPBOOK_TEXTURE_KIND, blending);
+    }
+    const delay = options.delay ?? 0;
+    const fadeIn = options.fadeIn ?? 0;
+    const fx = this.acquireFlipbookSprite(profile.assetId, blending);
+    fx.material.opacity = delay > 0 || fadeIn > 0 ? 0 : opacity;
+    fx.material.color.set(options.color ?? 0xffffff);
+    fx.material.rotation = 0;
+    fx.sprite.position.copy(origin);
+    fx.sprite.scale.set(startSize * aspect, startSize, 1);
+    fx.sprite.renderOrder = blending === THREE.AdditiveBlending ? 8 : 5;
+    fx.sprite.visible = delay <= 0;
+    fx.sprite.frustumCulled = false;
+    fx.life = 0;
+    fx.maxLife = maxLife;
+    fx.maxOpacity = opacity;
+    fx.startSize = startSize;
+    fx.endSize = endSize;
+    fx.aspect = aspect;
+    fx.rise = rise;
+    fx.delay = delay;
+    fx.fadeIn = fadeIn;
+    fx.velocity.copy(velocity ?? ZERO_VECTOR);
+    fx.rotationSpeed = THREE.MathUtils.randFloat(-0.48, 0.48);
+    fx.flipbook = {
+      assetId: profile.assetId,
+      columns: profile.columns,
+      rows: profile.rows,
+      frameCount: profile.frameCount,
+      startFrame: options.startFrame ?? 0,
+      frameSpan: options.frameSpan ?? profile.frameCount,
+      loop: options.loop ?? false,
+      randomStart: options.randomStart ?? false
+    };
+    updateFlipbookSprite(fx, 0);
+    addToSceneIfNeeded(this.scene, fx.sprite);
+    this.sprites.push(fx);
+    perfMonitor.addCount("vfx.flipbooksSpawned");
     this.trimSprites();
   }
 
@@ -650,7 +848,8 @@ export class ParticleSystem {
         THREE.MathUtils.randFloat(0.16, 0.46),
         THREE.NormalBlending,
         THREE.MathUtils.randFloat(0.72, 1.38),
-        drift
+        drift,
+        { delay: THREE.MathUtils.randFloat(0.06, 0.18), fadeIn: THREE.MathUtils.randFloat(0.12, 0.22) }
       );
     }
 
@@ -678,7 +877,8 @@ export class ParticleSystem {
         THREE.MathUtils.randFloat(0.08, 0.2),
         THREE.NormalBlending,
         THREE.MathUtils.randFloat(0.58, 1.45),
-        drift
+        drift,
+        { delay: THREE.MathUtils.randFloat(0.16, 0.36), fadeIn: THREE.MathUtils.randFloat(0.22, 0.36) }
       );
     }
   }
@@ -693,10 +893,10 @@ export class ParticleSystem {
     if (this.quality === "performance") {
       return;
     }
-    const amount = THREE.MathUtils.clamp(intensity, 0.45, 1.6) * (this.quality === "cinematic" ? 1.12 : 0.78);
-    const sheetCount = this.quality === "cinematic" ? 4 : 2;
-    this.spawnPressureWave(this.offsetOrigin(origin, 0, 0.01, 0), radius * 0.72, dustColor, 0.13, amount);
-    this.spawnBurst(this.offsetOrigin(origin, 0, 0.08, 0), Math.round(30 * amount), dustColor, 1.85, 0.105, 3.6 * amount, 1.85, 0.48);
+    const amount = THREE.MathUtils.clamp(intensity, 0.45, 1.85) * (this.quality === "cinematic" ? 1.2 : 0.86);
+    const sheetCount = this.quality === "cinematic" ? 5 : 3;
+    this.spawnPressureWave(this.offsetOrigin(origin, 0, 0.01, 0), radius * 0.78, dustColor, 0.16, amount);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.08, 0), Math.round(38 * amount), dustColor, 1.95, 0.105, 4.1 * amount, 1.85, 0.48);
 
     for (let i = 0; i < sheetCount; i += 1) {
       const angle = (i / sheetCount) * Math.PI * 2 + THREE.MathUtils.randFloatSpread(0.5);
@@ -721,7 +921,8 @@ export class ParticleSystem {
         THREE.MathUtils.randFloat(0.025, 0.085),
         THREE.NormalBlending,
         THREE.MathUtils.randFloat(0.55, 1.55),
-        drift
+        drift,
+        { delay: THREE.MathUtils.randFloat(0.2, 0.42), fadeIn: THREE.MathUtils.randFloat(0.24, 0.42) }
       );
     }
   }
@@ -747,14 +948,262 @@ export class ParticleSystem {
     wave.mesh.visible = true;
     wave.mesh.frustumCulled = false;
     wave.life = 0;
-    wave.maxLife = THREE.MathUtils.lerp(0.24, 0.44, THREE.MathUtils.clamp(intensity, 0, 1));
+    wave.maxLife = THREE.MathUtils.lerp(0.26, 0.52, THREE.MathUtils.clamp(intensity, 0, 1));
     wave.startRadius = radius * 0.16;
-    wave.endRadius = radius * THREE.MathUtils.randFloat(1.15, 1.65);
+    wave.endRadius = radius * THREE.MathUtils.randFloat(1.22, 1.82);
     wave.maxOpacity = maxOpacity;
     addToSceneIfNeeded(this.scene, wave.mesh);
     this.pressureWaves.push(wave);
     perfMonitor.addCount("vfx.pressureWavesSpawned");
     this.trimPressureWaves();
+  }
+
+  private spawnImpactPunch(
+    origin: THREE.Vector3,
+    coreOrigin: THREE.Vector3,
+    visualRadius: number,
+    profile: ExplosionProfile,
+    dustColor: THREE.Color,
+    context: ExplosionFxContext,
+    impactScale: number
+  ): void {
+    const roleScale = context.role === "primary" ? 1 : context.role === "ignition" ? 0.82 : 0.62;
+    const amount = THREE.MathUtils.clamp(impactScale * projectileBoomScale(context.projectileId) * roleScale, 0.36, 2.25);
+    const hotOpacity = context.role === "primary" ? 0.26 : 0.2;
+    this.spawnSprite(
+      this.offsetOrigin(coreOrigin, 0, 0.04, 0),
+      CORE_TEXTURE,
+      profile.coreColor,
+      visualRadius * 0.08,
+      visualRadius * (0.42 + amount * 0.16),
+      hotOpacity,
+      0.14,
+      0.06,
+      THREE.AdditiveBlending,
+      1.25
+    );
+    if (context.role === "primary") {
+      this.spawnSprite(coreOrigin, CORE_TEXTURE, 0xfff4d8, visualRadius * 0.035, visualRadius * 0.32, 0.14, 0.08, 0.01, THREE.AdditiveBlending);
+    }
+    this.spawnPressureWave(origin, visualRadius * (0.7 + amount * 0.2), profile.edgeColor, 0.22, amount);
+
+    if (this.quality === "performance" && context.role !== "primary") {
+      return;
+    }
+
+    this.spawnPressureWave(this.offsetOrigin(origin, 0, 0.03, 0), visualRadius * (0.52 + amount * 0.16), dustColor, 0.1, amount);
+    this.spawnBurst(
+      this.offsetOrigin(origin, 0, 0.12, 0),
+      Math.round(36 * amount),
+      profile.hotColor,
+      0.42,
+      0.04,
+      22 * amount,
+      0.52,
+      0.04,
+      THREE.AdditiveBlending
+    );
+  }
+
+  private spawnBoomFireball(
+    origin: THREE.Vector3,
+    coreOrigin: THREE.Vector3,
+    visualRadius: number,
+    profile: ExplosionProfile,
+    context: ExplosionFxContext,
+    impactScale: number
+  ): void {
+    const heat = THREE.MathUtils.clamp((0.9 + profile.fireBias * 0.95) * impactScale * projectileBoomScale(context.projectileId), 0.35, 3.05);
+    const isShockOnly = context.projectileId === "pulse";
+    const isCrush = context.projectileId === "gravity";
+    if (isCrush && context.role === "secondary") {
+      return;
+    }
+    const spriteCount =
+      this.quality === "performance" ? (context.role === "primary" ? 1 : 0) : this.quality === "balanced" ? 4 : 6;
+    const flameColor = isShockOnly ? profile.shockColor : isCrush ? 0x9c71ff : profile.hotColor;
+    const coreColor = isShockOnly ? 0xd9feff : isCrush ? 0xd8c6ff : profile.coreColor;
+    const flipbookScale = context.role === "primary" ? 1 : 0.68;
+
+    if (context.role === "primary" || this.quality !== "performance") {
+      this.spawnFlipbookSprite(
+        coreOrigin,
+        isShockOnly ? VFX_FLIPBOOK_PROFILES.smoke : isCrush ? VFX_FLIPBOOK_PROFILES.dustShell : VFX_FLIPBOOK_PROFILES.explosion,
+        visualRadius * (isShockOnly ? 0.52 : 0.82) * flipbookScale,
+        visualRadius * (isShockOnly ? 1.45 : 2.85) * flipbookScale,
+        isShockOnly ? 0.12 : isCrush ? 0.54 : 0.62,
+        isShockOnly ? 0.92 : 1.05,
+        isShockOnly ? 0.18 : 0.44,
+        isShockOnly ? THREE.NormalBlending : THREE.AdditiveBlending,
+        isShockOnly ? 1.35 : 1.1,
+        new THREE.Vector3(0, isShockOnly ? 0.2 : 0.48, 0),
+        {
+          startFrame: 1,
+          frameSpan: isShockOnly ? 42 : 24,
+          color: isShockOnly ? 0x8ffcff : isCrush ? 0xc2a6ff : 0xffffff,
+          fadeIn: isShockOnly ? 0.08 : 0.04
+        }
+      );
+      this.spawnFlipbookSprite(
+        this.offsetOrigin(coreOrigin, 0, visualRadius * 0.18, 0),
+        VFX_FLIPBOOK_PROFILES.fireball,
+        visualRadius * (isShockOnly ? 0.42 : 0.58) * flipbookScale,
+        visualRadius * (isShockOnly ? 1.35 : 2.05) * flipbookScale,
+        isShockOnly ? 0.12 : isCrush ? 0.46 : 0.58,
+        0.92,
+        isShockOnly ? 0.18 : 0.76,
+        THREE.AdditiveBlending,
+        0.92,
+        new THREE.Vector3(0, isShockOnly ? 0.28 : 0.82, 0),
+        { startFrame: 4, frameSpan: 42, color: isShockOnly ? 0x61f4ff : isCrush ? 0x7b52ff : 0xffffff, fadeIn: 0.04 }
+      );
+    }
+
+    for (let i = 0; i < spriteCount; i += 1) {
+      const angle = (i / spriteCount) * Math.PI * 2 + THREE.MathUtils.randFloatSpread(0.34);
+      const distance = THREE.MathUtils.randFloat(visualRadius * 0.03, visualRadius * 0.22);
+      const lift = THREE.MathUtils.randFloat(visualRadius * 0.02, visualRadius * 0.18) + i * 0.015;
+      const originOffset = this.offsetOrigin(coreOrigin, Math.cos(angle) * distance, lift, Math.sin(angle) * distance);
+      const start = visualRadius * THREE.MathUtils.randFloat(0.18, 0.34) * heat;
+      const end = start * THREE.MathUtils.randFloat(isShockOnly ? 2.2 : 2.6, isShockOnly ? 3.7 : 4.8);
+      const velocity = new THREE.Vector3(
+        Math.cos(angle) * THREE.MathUtils.randFloat(0.18, 0.52),
+        THREE.MathUtils.randFloat(0.28, 0.96),
+        Math.sin(angle) * THREE.MathUtils.randFloat(0.18, 0.52)
+      );
+      this.spawnSprite(
+        originOffset,
+        CORE_TEXTURE,
+        i % 4 === 0 ? coreColor : i % 2 === 0 ? profile.edgeColor : flameColor,
+        start,
+        end,
+        isShockOnly ? 0.14 : 0.24,
+        THREE.MathUtils.randFloat(0.58, 1.05),
+        THREE.MathUtils.randFloat(0.36, 0.95),
+        THREE.AdditiveBlending,
+        THREE.MathUtils.randFloat(0.68, 1.35),
+        velocity
+      );
+    }
+
+    if (isShockOnly) {
+      return;
+    }
+
+    const lickCount = this.quality === "performance" ? 1 : this.quality === "balanced" ? 6 : 9;
+    for (let i = 0; i < lickCount; i += 1) {
+      const angle = (i / lickCount) * Math.PI * 2 + THREE.MathUtils.randFloatSpread(0.45);
+      const distance = THREE.MathUtils.randFloat(visualRadius * 0.05, visualRadius * 0.32);
+      this.fireLick(this.offsetOrigin(origin, Math.cos(angle) * distance, 0.05, Math.sin(angle) * distance), heat * 0.96);
+    }
+
+    this.spawnBurst(
+      this.offsetOrigin(origin, 0, 0.18, 0),
+      Math.round(82 * heat),
+      isCrush ? 0xb08aff : 0xffb34f,
+      0.78,
+      0.07,
+      12 * heat,
+      isCrush ? 0.42 : 0.2,
+      0.075,
+      THREE.AdditiveBlending
+    );
+  }
+
+  private spawnRollingExplosionCloud(
+    origin: THREE.Vector3,
+    coreOrigin: THREE.Vector3,
+    visualRadius: number,
+    smokeColor: THREE.Color,
+    dustColor: THREE.Color,
+    context: ExplosionFxContext,
+    impactScale: number
+  ): void {
+    if (this.quality === "performance" && context.role !== "primary") {
+      return;
+    }
+    if (context.projectileId === "gravity" && context.role === "secondary") {
+      return;
+    }
+
+    const amount = THREE.MathUtils.clamp(impactScale * (0.9 + (context.projectileId === "gravity" ? 0.34 : 0)), 0.45, 2.4);
+    const pulseCloudScale = context.projectileId === "pulse" ? 0.58 : 1;
+    if (context.role === "primary" || this.quality !== "performance") {
+      this.spawnFlipbookSprite(
+        this.offsetOrigin(coreOrigin, 0, visualRadius * 0.28, 0),
+        VFX_FLIPBOOK_PROFILES.smoke,
+        visualRadius * 0.68 * amount * pulseCloudScale,
+        visualRadius * 3.9 * amount * pulseCloudScale,
+        context.projectileId === "pulse" ? 0.13 : 0.42,
+        2.8,
+        0.72,
+        THREE.NormalBlending,
+        1.25,
+        new THREE.Vector3(0, 0.46, 0),
+        {
+          startFrame: 2,
+          frameSpan: 54,
+          randomStart: context.role !== "primary",
+          color: context.projectileId === "pulse" ? 0xaaffff : context.projectileId === "gravity" ? 0x9c71ff : 0xffffff,
+          delay: context.projectileId === "pulse" ? 0.16 : 0.12,
+          fadeIn: context.projectileId === "pulse" ? 0.32 : 0.24
+        }
+      );
+      this.spawnFlipbookSprite(
+        this.offsetOrigin(origin, 0, 0.08, 0),
+        VFX_FLIPBOOK_PROFILES.dustShell,
+        visualRadius * 0.58 * amount * pulseCloudScale,
+        visualRadius * 2.7 * amount * pulseCloudScale,
+        context.projectileId === "pulse" ? 0.14 : 0.28,
+        1.55,
+        0.18,
+        THREE.NormalBlending,
+        1.45,
+        new THREE.Vector3(0, 0.18, 0),
+        {
+          startFrame: 1,
+          frameSpan: 23,
+          color: context.projectileId === "gravity" ? 0x8d6cff : 0xffffff,
+          delay: 0.08,
+          fadeIn: 0.18
+        }
+      );
+    }
+    const plumeCount = this.quality === "performance" ? 2 : this.quality === "balanced" ? 5 : 7;
+    for (let i = 0; i < plumeCount; i += 1) {
+      const angle = (i / plumeCount) * Math.PI * 2 + THREE.MathUtils.randFloatSpread(0.5);
+      const distance = THREE.MathUtils.randFloat(visualRadius * 0.04, visualRadius * 0.34);
+      const lifted = this.offsetOrigin(
+        coreOrigin,
+        Math.cos(angle) * distance,
+        THREE.MathUtils.randFloat(visualRadius * 0.04, visualRadius * 0.24),
+        Math.sin(angle) * distance
+      );
+      const startSize = THREE.MathUtils.randFloat(visualRadius * 0.24, visualRadius * 0.54) * amount;
+      const drift = new THREE.Vector3(
+        Math.cos(angle) * THREE.MathUtils.randFloat(0.08, 0.32),
+        THREE.MathUtils.randFloat(0.2, 0.72),
+        Math.sin(angle) * THREE.MathUtils.randFloat(0.08, 0.32)
+      );
+      this.spawnSprite(
+        lifted,
+        SMOKE_TEXTURE,
+        i % 2 === 0 ? smokeColor : dustColor,
+        startSize,
+        startSize * THREE.MathUtils.randFloat(2.8, 5.6),
+        THREE.MathUtils.randFloat(0.18, 0.32),
+        THREE.MathUtils.randFloat(1.8, 3.6),
+        THREE.MathUtils.randFloat(0.22, 0.62),
+        THREE.NormalBlending,
+        THREE.MathUtils.randFloat(0.7, 1.55),
+        drift,
+        { delay: THREE.MathUtils.randFloat(0.1, 0.24), fadeIn: THREE.MathUtils.randFloat(0.16, 0.28) }
+      );
+    }
+
+    if (context.projectileId === "slug" || context.projectileId === "scatter" || context.projectileId === "ignite") {
+      this.spawnBurst(this.offsetOrigin(origin, 0, 0.24, 0), Math.round(54 * amount), 0x1d1b19, 2.1, 0.14, 4.2 * amount, -0.2, 0.42);
+    }
   }
 
   private spawnDirectionalBlast(
@@ -828,28 +1277,42 @@ export class ParticleSystem {
     const direction = normalizedImpactDirectionInto(this.signatureDirection, context.impactDirection);
     switch (context.projectileId) {
       case "slug":
-        this.spawnDirectionalStreaks(origin, direction, visualRadius * 1.22, 0xd8f1ff, Math.round(16 * impactScale), 0.34, 0.18);
-        this.spawnSprite(coreOrigin, CORE_TEXTURE, 0xd8f1ff, visualRadius * 0.18, visualRadius * 1.15, 0.28, 0.28, 0.18, THREE.AdditiveBlending, 0.38);
+        this.spawnPressureWave(origin, visualRadius * 0.92, 0xd8f1ff, 0.28, impactScale);
+        this.spawnDirectionalStreaks(origin, direction, visualRadius * 1.32, 0xd8f1ff, Math.round(22 * impactScale), 0.36, 0.16);
+        this.spawnDirectionalBurst(origin, direction, Math.round(38 * impactScale), 0xfff0c2, 0.44, 0.03, 38 * impactScale, 0.48, 0.026, 0.18, THREE.AdditiveBlending);
+        this.spawnSprite(coreOrigin, CORE_TEXTURE, 0xfff4d8, visualRadius * 0.2, visualRadius * 1.28, 0.34, 0.28, 0.2, THREE.AdditiveBlending, 0.42);
         break;
       case "scatter":
         this.signatureLiftedDirection.copy(direction);
         this.signatureLiftedDirection.y += 0.2;
         this.signatureLiftedDirection.normalize();
-        this.spawnDirectionalStreaks(origin, this.signatureLiftedDirection, visualRadius * 1.16, 0xffdd8a, Math.round(18 * impactScale), 0.36, 0.62);
-        this.spawnBurst(origin, Math.round(46 * impactScale), 0xffd26b, 0.46, 0.028, 34 * impactScale, 0.62, 0.03, THREE.AdditiveBlending);
+        this.spawnDirectionalStreaks(origin, this.signatureLiftedDirection, visualRadius * 1.24, 0xffdd8a, Math.round(24 * impactScale), 0.38, 0.68);
+        this.spawnStreaks(origin, visualRadius * 1.28, 0xfff0a8, Math.round(18 * impactScale), 0.36);
+        this.spawnBurst(origin, Math.round(62 * impactScale), 0xffd26b, 0.48, 0.028, 38 * impactScale, 0.62, 0.03, THREE.AdditiveBlending);
+        this.spawnPressureWave(origin, visualRadius * 0.7, 0xffc961, 0.24, impactScale);
         break;
       case "pulse":
-        this.spawnArcWeb(origin, visualRadius * 0.96, profile.shockColor, Math.round(22 * impactScale), 0.56);
-        this.spawnSprite(coreOrigin, CORE_TEXTURE, profile.shockColor, visualRadius * 0.4, visualRadius * 1.65, 0.24, 0.42, 0.08, THREE.AdditiveBlending, 1.55);
+        this.spawnPressureWave(origin, visualRadius * 1.22, 0xd9feff, 0.34, impactScale * 1.18);
+        this.spawnPressureWave(origin, visualRadius * 1.55, profile.shockColor, 0.18, impactScale);
+        this.spawnArcWeb(origin, visualRadius * 1.08, profile.shockColor, Math.round(24 * impactScale), 0.5);
+        this.spawnArcWeb(origin, visualRadius * 0.62, 0xd9feff, Math.round(10 * impactScale), 0.34);
+        this.spawnSprite(coreOrigin, CORE_TEXTURE, profile.shockColor, visualRadius * 0.28, visualRadius * 1.18, 0.12, 0.34, 0.08, THREE.AdditiveBlending, 1.65);
         break;
       case "gravity":
-        this.spawnArcWeb(origin, visualRadius * 0.88, 0x8d6cff, Math.round(16 * impactScale), 0.62);
-        this.spawnSprite(coreOrigin, SMOKE_TEXTURE, 0x251a35, visualRadius * 0.48, visualRadius * 1.82, 0.36, 0.82, -0.1, THREE.NormalBlending, 1.18);
-        this.spawnBurst(this.offsetOrigin(origin, 0, -0.05, 0), Math.round(62 * impactScale), 0x2a143d, 1.05, 0.06, 13 * impactScale, -0.35, 0.12, THREE.AdditiveBlending);
+        {
+          const crushScale = context.role === "secondary" ? 0.62 : 1;
+          this.spawnPressureWave(origin, visualRadius * 1.1 * crushScale, 0x9c71ff, 0.34, impactScale);
+          this.spawnArcWeb(origin, visualRadius * 0.96 * crushScale, 0x8d6cff, Math.round(18 * impactScale * crushScale), 0.54);
+          this.spawnSprite(coreOrigin, SMOKE_TEXTURE, 0x251a35, visualRadius * 0.5 * crushScale, visualRadius * 1.85 * crushScale, 0.34, 0.78, -0.1, THREE.NormalBlending, 1.18);
+          this.spawnSprite(this.offsetOrigin(coreOrigin, 0, 0.16, 0), CORE_TEXTURE, 0xb08aff, visualRadius * 0.16 * crushScale, visualRadius * 1.1 * crushScale, 0.26, 0.24, 0.04, THREE.AdditiveBlending, 0.62);
+          this.spawnBurst(this.offsetOrigin(origin, 0, -0.05, 0), Math.round(58 * impactScale * crushScale), 0x2a143d, 1.05, 0.052, 13 * impactScale, -0.35, 0.12, THREE.AdditiveBlending);
+        }
         break;
       case "ignite":
-        this.spawnSprite(this.offsetOrigin(coreOrigin, 0, 0.18, 0), CORE_TEXTURE, 0xff7a35, visualRadius * 0.22, visualRadius * 1.75, 0.38, 0.54, 0.64, THREE.AdditiveBlending, 0.52);
-        this.spawnBurst(coreOrigin, Math.round(50 * impactScale), 0xffd25c, 0.72, 0.033, 18 * impactScale, 0.14, 0.04, THREE.AdditiveBlending);
+        this.spawnPressureWave(origin, visualRadius * 0.95, 0xffb16b, 0.3, impactScale);
+        this.spawnSprite(this.offsetOrigin(coreOrigin, 0, 0.18, 0), CORE_TEXTURE, 0xff7a35, visualRadius * 0.28, visualRadius * 2.05, 0.48, 0.58, 0.72, THREE.AdditiveBlending, 0.52);
+        this.spawnBurst(coreOrigin, Math.round(66 * impactScale), 0xffd25c, 0.74, 0.033, 20 * impactScale, 0.14, 0.04, THREE.AdditiveBlending);
+        this.spawnBurst(this.offsetOrigin(coreOrigin, 0, 0.32, 0), Math.round(44 * impactScale), 0xff5b24, 0.62, 0.07, 8.5 * impactScale, -0.1, 0.2, THREE.AdditiveBlending);
         break;
       case undefined:
         break;
@@ -862,10 +1325,11 @@ export class ParticleSystem {
     context: ExplosionFxContext,
     profile: ExplosionProfile,
     dustColor: THREE.Color,
-    impactScale: number
+    impactScale: number,
+    composition: CompositionProfile
   ): void {
     const responseDirection = normalizedImpactDirectionInto(this.responseDirection, context.impactDirection);
-    for (const materialId of dominantMaterials(context.result, context.hitMaterialId).slice(0, this.materialResponseBudget())) {
+    for (const materialId of dominantMaterials(context.result, context.hitMaterialId).slice(0, this.materialResponseBudget(context, composition))) {
       switch (materialId) {
         case "glass":
           this.spawnBurst(this.offsetOrigin(origin, 0, 0.18, 0), Math.round(46 * impactScale), 0xd8fbff, 0.64, 0.024, 22 * impactScale, 0.28, 0.04, THREE.AdditiveBlending);
@@ -891,8 +1355,8 @@ export class ParticleSystem {
       }
     }
 
-    if (profile.shockBias > 0.5) {
-      this.spawnArcWeb(origin, visualRadius * 0.7, profile.shockColor, Math.round(10 * impactScale * profile.shockBias), 0.5);
+    if (profile.shockBias > 0.5 && composition.materialResponses > 0) {
+      this.spawnArcWeb(origin, visualRadius * 0.7, profile.shockColor, Math.round(8 * impactScale * profile.shockBias * composition.materialResponses), 0.42);
     }
   }
 
@@ -1017,8 +1481,12 @@ export class ParticleSystem {
     this.trimBursts();
   }
 
-  private materialResponseBudget(): number {
-    return this.quality === "performance" ? 1 : this.quality === "balanced" ? 2 : 3;
+  private materialResponseBudget(context: ExplosionFxContext, composition: CompositionProfile): number {
+    if (composition.materialResponses <= 0 || (context.projectileId === "gravity" && context.role === "secondary")) {
+      return 0;
+    }
+    const base = this.quality === "performance" ? 1 : this.quality === "balanced" ? 2 : 3;
+    return Math.max(1, Math.round(base * composition.materialResponses));
   }
 
   private spawnBurst(
@@ -1173,6 +1641,17 @@ export class ParticleSystem {
     return this.createSprite(textureKind, blending);
   }
 
+  private acquireFlipbookSprite(assetId: FlipbookState["assetId"], blending: THREE.Blending): FxSprite {
+    const poolIndex = this.findFlipbookSpritePoolIndex(assetId, blending);
+    if (poolIndex >= 0) {
+      const sprite = takeUnordered(this.spritePool, poolIndex);
+      perfMonitor.addCount("vfx.spritePoolReuse");
+      return sprite;
+    }
+    perfMonitor.addCount("vfx.spritePoolCreate");
+    return this.createFlipbookSprite(assetId, blending);
+  }
+
   private createSprite(textureKind: string, blending: THREE.Blending): FxSprite {
     const material = new THREE.SpriteMaterial({
       map: radialTexture(textureKind),
@@ -1193,13 +1672,94 @@ export class ParticleSystem {
       endSize: 1,
       aspect: 1,
       rise: 0,
+      delay: 0,
+      fadeIn: 0,
+      velocity: new THREE.Vector3(),
+      rotationSpeed: 0
+    };
+  }
+
+  private createFlipbookSprite(assetId: FlipbookState["assetId"], blending: THREE.Blending = THREE.AdditiveBlending): FxSprite {
+    const texture = uniqueGraphicTexture(assetId, {
+      wrap: THREE.ClampToEdgeWrapping,
+      colorSpace: THREE.SRGBColorSpace,
+      anisotropy: 2
+    });
+    texture.repeat.set(1, 1);
+    texture.offset.set(0, 0);
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      alphaTest: 0.015,
+      opacity: 1,
+      depthWrite: false,
+      blending
+    });
+    return {
+      sprite: new THREE.Sprite(material),
+      material,
+      textureKind: VFX_FLIPBOOK_TEXTURE_KIND,
+      blending,
+      flipbook: {
+        assetId,
+        columns: 1,
+        rows: 1,
+        frameCount: 1,
+        startFrame: 0,
+        frameSpan: 1,
+        loop: false,
+        randomStart: false
+      },
+      life: 0,
+      maxLife: 1,
+      maxOpacity: 1,
+      startSize: 1,
+      endSize: 1,
+      aspect: 1,
+      rise: 0,
+      delay: 0,
+      fadeIn: 0,
       velocity: new THREE.Vector3(),
       rotationSpeed: 0
     };
   }
 
   private findSpritePoolIndex(textureKind: string, blending: THREE.Blending): number {
-    return this.spritePool.findIndex((sprite) => sprite.textureKind === textureKind && sprite.blending === blending);
+    return this.spritePool.findIndex((sprite) => !sprite.flipbook && sprite.textureKind === textureKind && sprite.blending === blending);
+  }
+
+  private findFlipbookSpritePoolIndex(assetId: FlipbookState["assetId"], blending: THREE.Blending): number {
+    return this.spritePool.findIndex((sprite) => sprite.flipbook?.assetId === assetId && sprite.blending === blending);
+  }
+
+  private countActiveFlipbookSprites(assetId: FlipbookState["assetId"], blending: THREE.Blending): number {
+    return this.sprites.reduce((total, sprite) => total + Number(sprite.flipbook?.assetId === assetId && sprite.blending === blending), 0);
+  }
+
+  private countPooledFlipbookSprites(assetId: FlipbookState["assetId"], blending: THREE.Blending): number {
+    return this.spritePool.reduce((total, sprite) => total + Number(sprite.flipbook?.assetId === assetId && sprite.blending === blending), 0);
+  }
+
+  private retireOldestFlipbookSprite(assetId: FlipbookState["assetId"], blending: THREE.Blending): boolean {
+    const index = this.sprites.findIndex((sprite) => sprite.flipbook?.assetId === assetId && sprite.blending === blending);
+    if (index < 0) {
+      return false;
+    }
+    this.retireSpriteAt(index);
+    perfMonitor.addCount("vfx.flipbookActiveRetired");
+    return true;
+  }
+
+  private flipbookActiveLimit(assetId: FlipbookState["assetId"], blending: THREE.Blending): number {
+    const base = this.quality === "performance" ? 1 : this.quality === "balanced" ? 2 : 3;
+    if (assetId === "vfxSmokeAtlas" || blending === THREE.NormalBlending) {
+      return base + (this.quality === "cinematic" ? 1 : 0);
+    }
+    return base;
+  }
+
+  private flipbookPoolLimit(assetId: FlipbookState["assetId"], blending: THREE.Blending): number {
+    return this.flipbookActiveLimit(assetId, blending) + 1;
   }
 
   private acquireStreak(count: number, color: THREE.ColorRepresentation, opacity: number): StreakBurst {
@@ -1348,6 +1908,11 @@ export class ParticleSystem {
   }
 
   private releaseSprite(sprite: FxSprite): void {
+    if (sprite.flipbook && this.countPooledFlipbookSprites(sprite.flipbook.assetId, sprite.blending) >= this.flipbookPoolLimit(sprite.flipbook.assetId, sprite.blending)) {
+      perfMonitor.addCount("vfx.flipbookPoolOverflowDisposed");
+      this.disposeSprite(sprite);
+      return;
+    }
     if (this.spritePool.length < ParticleSystem.maxSpritePool) {
       this.parkSpriteForPipeline(sprite, false);
       this.spritePool.push(sprite);
@@ -1383,6 +1948,9 @@ export class ParticleSystem {
 
   private disposeSprite(sprite: FxSprite): void {
     this.scene.remove(sprite.sprite);
+    if (sprite.flipbook) {
+      sprite.material.map?.dispose();
+    }
     sprite.material.dispose();
   }
 
@@ -1420,8 +1988,13 @@ export class ParticleSystem {
 
   private parkSpriteForPipeline(sprite: FxSprite, visible: boolean): void {
     sprite.life = 0;
+    sprite.delay = 0;
+    sprite.fadeIn = 0;
     sprite.material.opacity = 1;
     sprite.material.rotation = 0;
+    if (sprite.flipbook) {
+      configureFlipbookMap(sprite.material.map, Math.max(1, sprite.flipbook.columns), Math.max(1, sprite.flipbook.rows), 0);
+    }
     sprite.sprite.visible = visible;
     sprite.sprite.frustumCulled = false;
     sprite.sprite.position.set(0, VFX_POOL_PARK_Y, 0);
@@ -1484,11 +2057,12 @@ export class ParticleSystem {
     }
   }
 
-  private setFlashOverlay(profile: ExplosionProfile, impactScale: number): void {
-    const core = colorToCss(profile.coreColor, 0.72);
+  private setFlashOverlay(profile: ExplosionProfile, impactScale: number, overlayMax: number): void {
+    const core = colorToCss(profile.coreColor, 0.62);
     const shock = colorToCss(profile.shockColor, 0.22);
-    this.flashOverlay.style.background = `radial-gradient(circle at center, ${core}, ${shock} 34%, transparent 68%)`;
-    this.flashOverlay.style.opacity = String(profile.overlayOpacity * THREE.MathUtils.clamp(impactScale, 0.72, 1.5) * this.flashScale);
+    this.flashOverlay.style.background = `radial-gradient(circle at center, ${core} 0%, ${core} 12%, ${shock} 34%, transparent 66%)`;
+    const opacity = profile.overlayOpacity * THREE.MathUtils.clamp(impactScale, 0.72, 1.48) * this.flashScale;
+    this.flashOverlay.style.opacity = String(Math.min(overlayMax, opacity));
   }
 
   private disposeAllTransientObjects(): void {
@@ -1538,15 +2112,94 @@ export class ParticleSystem {
     return THREE.MathUtils.clamp(0.82 + fractureBoost + bodyBoost + damageBoost + roleBoost + (context.powerScale ?? 1) * 0.08 + (context.sizeScale ?? 1) * 0.08, 0.72, 1.85);
   }
 
+  private explosionComposition(context: ExplosionFxContext): CompositionProfile {
+    const composition: CompositionProfile = {
+      fire: 1,
+      smoke: 1,
+      streaks: 1,
+      materialResponses: 0.8,
+      overlayMax: 0.58
+    };
+
+    if (context.role === "secondary") {
+      composition.fire *= 0.72;
+      composition.smoke *= 0.68;
+      composition.streaks *= 0.92;
+      composition.materialResponses *= 0.55;
+      composition.overlayMax = 0.42;
+    } else if (context.role === "ignition") {
+      composition.fire *= 0.86;
+      composition.smoke *= 0.72;
+      composition.streaks *= 0.78;
+      composition.materialResponses *= 0.55;
+      composition.overlayMax = 0.46;
+    }
+
+    switch (context.projectileId) {
+      case "slug":
+        composition.fire *= 1.08;
+        composition.smoke *= 0.84;
+        composition.streaks *= 0.9;
+        composition.overlayMax = Math.min(composition.overlayMax, 0.6);
+        break;
+      case "scatter":
+        composition.fire *= 0.68;
+        composition.smoke *= 0.54;
+        composition.streaks *= 1.26;
+        composition.materialResponses *= 0.72;
+        composition.overlayMax = Math.min(composition.overlayMax, 0.46);
+        break;
+      case "pulse":
+        composition.fire *= 0.24;
+        composition.smoke *= 0.34;
+        composition.streaks *= 1.18;
+        composition.materialResponses *= 0.42;
+        composition.overlayMax = Math.min(composition.overlayMax, 0.36);
+        break;
+      case "gravity":
+        composition.fire *= 0.2;
+        composition.smoke *= 0.5;
+        composition.streaks *= 1.06;
+        composition.materialResponses *= 0.45;
+        composition.overlayMax = Math.min(composition.overlayMax, 0.48);
+        if (context.role === "secondary") {
+          composition.fire = 0.08;
+          composition.smoke = 0.16;
+          composition.streaks = 0.82;
+          composition.materialResponses = 0;
+          composition.overlayMax = 0.26;
+        }
+        break;
+      case "ignite":
+        composition.fire *= 1.05;
+        composition.smoke *= 0.8;
+        composition.streaks *= 0.76;
+        composition.overlayMax = Math.min(composition.overlayMax, 0.52);
+        break;
+      case undefined:
+        break;
+    }
+
+    if (this.quality === "performance" && context.role === "secondary") {
+      composition.fire *= 0.7;
+      composition.smoke *= 0.65;
+      composition.streaks *= 0.75;
+      composition.materialResponses *= 0.5;
+      composition.overlayMax = Math.min(composition.overlayMax, 0.32);
+    }
+
+    return composition;
+  }
+
   private explosionParticleDensity(context: ExplosionFxContext): number {
     const roleDensity = context.role === "secondary" ? 0.72 : context.role === "ignition" ? 0.62 : 1;
-    return THREE.MathUtils.clamp(context.densityScale ?? roleDensity, 0.45, 1);
+    return THREE.MathUtils.clamp(context.densityScale ?? roleDensity, 0.32, 1);
   }
 
   private qualityDensity(): number {
     switch (this.quality) {
       case "performance":
-        return 0.66;
+        return 0.5;
       case "balanced":
         return 0.9;
       case "cinematic":
@@ -1590,6 +2243,32 @@ function writeDirectionBasis(direction: THREE.Vector3, forward: THREE.Vector3, s
   } else {
     up.normalize();
   }
+}
+
+function updateFlipbookSprite(sprite: FxSprite, normalizedAge: number): void {
+  const flipbook = sprite.flipbook;
+  if (!flipbook) {
+    return;
+  }
+  const frameSpan = Math.max(1, Math.min(flipbook.frameSpan, flipbook.frameCount - flipbook.startFrame));
+  const clampedAge = flipbook.loop ? normalizedAge % 1 : THREE.MathUtils.clamp(normalizedAge, 0, 0.999);
+  const startOffset = flipbook.randomStart ? Math.floor((sprite.rotationSpeed + 1.8) * 1000) % frameSpan : 0;
+  const localFrame = (Math.floor(clampedAge * frameSpan) + startOffset) % frameSpan;
+  const frame = THREE.MathUtils.clamp(flipbook.startFrame + localFrame, 0, flipbook.frameCount - 1);
+  configureFlipbookMap(sprite.material.map, flipbook.columns, flipbook.rows, frame);
+}
+
+function configureFlipbookMap(texture: THREE.Texture | null, columns: number, rows: number, frame: number): void {
+  if (!texture) {
+    return;
+  }
+  const safeColumns = Math.max(1, columns);
+  const safeRows = Math.max(1, rows);
+  const safeFrame = Math.max(0, frame);
+  const tileX = safeFrame % safeColumns;
+  const tileY = Math.floor(safeFrame / safeColumns);
+  texture.repeat.set(1 / safeColumns, 1 / safeRows);
+  texture.offset.set(tileX / safeColumns, 1 - (tileY + 1) / safeRows);
 }
 
 function pooledCapacity(count: number, bucketSize: number): number {
@@ -1684,22 +2363,50 @@ function explosionProfile(projectileId?: ProjectileId, hitMaterialId?: MaterialI
 
   switch (projectileId) {
     case "slug":
-      return { ...profile, edgeColor: 0xd8f1ff, smokeColor: 0x303943, streakBias: 0.45, shockBias: 0.08 };
+      return {
+        ...profile,
+        coreColor: 0xffd86a,
+        edgeColor: 0xff6a24,
+        shockColor: 0xd8f1ff,
+        hotColor: 0xff4f18,
+        emberColor: 0xfff0a8,
+        smokeColor: 0x303943,
+        overlayOpacity: 0.58,
+        fireBias: 0.92,
+        smokeBias: 0.44,
+        streakBias: 0.62,
+        shockBias: 0.24
+      };
     case "scatter":
-      return { ...profile, coreColor: 0xfff0a8, edgeColor: 0xffb637, streakColor: 0xfff0a8, streakBias: 0.78, fireBias: 0.36 };
+      return {
+        ...profile,
+        coreColor: 0xfff0a8,
+        edgeColor: 0xffb637,
+        shockColor: 0xffc961,
+        hotColor: 0xffd26b,
+        emberColor: 0xfff0a8,
+        smokeColor: 0x332a1e,
+        streakColor: 0xfff0a8,
+        overlayOpacity: 0.48,
+        streakBias: 1.05,
+        fireBias: 0.72,
+        smokeBias: 0.26,
+        shockBias: 0.26
+      };
     case "pulse":
       return {
         ...profile,
-        coreColor: 0xd9feff,
-        edgeColor: 0x61f4ff,
-        shockColor: 0x8ff7ff,
-        hotColor: 0x7fffff,
+        coreColor: 0x9effff,
+        edgeColor: 0x42eaff,
+        shockColor: 0x61f4ff,
+        hotColor: 0x49f2ff,
         emberColor: 0xbaffff,
         smokeColor: 0x22333b,
-        overlayOpacity: 0.3,
+        overlayOpacity: 0.24,
         fireBias: 0.04,
         smokeBias: 0.02,
-        shockBias: 0.82
+        streakBias: 0.24,
+        shockBias: 1.05
       };
     case "gravity":
       return {
@@ -1710,11 +2417,11 @@ function explosionProfile(projectileId?: ProjectileId, hitMaterialId?: MaterialI
         hotColor: 0xb08aff,
         emberColor: 0xe2d5ff,
         smokeColor: 0x251a35,
-        overlayOpacity: 0.4,
+        overlayOpacity: 0.56,
         fireBias: 0.02,
-        smokeBias: 0.48,
-        streakBias: 0.12,
-        shockBias: 0.64
+        smokeBias: 0.66,
+        streakBias: 0.22,
+        shockBias: 0.86
       };
     case "ignite":
       return {
@@ -1725,11 +2432,11 @@ function explosionProfile(projectileId?: ProjectileId, hitMaterialId?: MaterialI
         hotColor: 0xff5b24,
         emberColor: 0xffd25c,
         smokeColor: 0x2b221d,
-        overlayOpacity: 0.42,
-        fireBias: 0.82,
-        smokeBias: 0.38,
-        streakBias: 0.38,
-        shockBias: 0.18
+        overlayOpacity: 0.5,
+        fireBias: 1.05,
+        smokeBias: 0.48,
+        streakBias: 0.48,
+        shockBias: 0.24
       };
     case undefined:
       break;
@@ -1742,6 +2449,23 @@ function explosionProfile(projectileId?: ProjectileId, hitMaterialId?: MaterialI
     return { ...profile, streakColor: 0xfff0a8, streakBias: profile.streakBias + 0.22 };
   }
   return profile;
+}
+
+function projectileBoomScale(projectileId?: ProjectileId): number {
+  switch (projectileId) {
+    case "slug":
+      return 1.22;
+    case "scatter":
+      return 1.08;
+    case "pulse":
+      return 1.18;
+    case "gravity":
+      return 1.32;
+    case "ignite":
+      return 1.28;
+    case undefined:
+      return 1;
+  }
 }
 
 function disposeGeometry(geometry: THREE.BufferGeometry): void {

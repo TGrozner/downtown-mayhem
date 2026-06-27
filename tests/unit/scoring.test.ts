@@ -11,10 +11,10 @@ describe("ShotScoreTracker", () => {
     expect(PROJECTILE_ORDER.map((id) => PROJECTILES[id].key)).toEqual(["1", "2", "3", "4"]);
     expect(PROJECTILE_ORDER.map((id) => PROJECTILES[id].shortName)).toEqual(["Normal", "Frag", "Impulse", "Heavy"]);
     expect(PROJECTILE_ORDER.map((id) => PROJECTILES[id].role)).toEqual([
-      "Balanced blast",
-      "Chain starter",
-      "Wide shove",
-      "Pierces structures"
+      "Classic fireball",
+      "Shrapnel pops",
+      "Cyan shockwave",
+      "Purple crush"
     ]);
   });
 

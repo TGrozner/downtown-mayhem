@@ -2495,14 +2495,14 @@ class Game {
     this.chainMilestonesAwarded.clear();
   }
 
-  private pushScoreEvents(events: ScoreEvent[]): void {
+  private pushScoreEvents(events: ScoreEvent[], revealDelaySeconds = 0): void {
     if (events.length === 0) {
       return;
     }
-    this.scorePopups.push(events);
+    this.scorePopups.push(events, revealDelaySeconds);
     const milestone = this.nextChainMilestone(events);
     if (milestone) {
-      this.scorePopups.showChainMilestone(milestone.label, milestone.combo);
+      this.scorePopups.showChainMilestone(milestone.label, milestone.combo, revealDelaySeconds);
     }
   }
 
@@ -4032,15 +4032,32 @@ class Game {
           : null;
       this.projectiles.removeActive();
       const scoreEvents = directResult ? this.applyExplosionResult(directResult, 0, 0) : [];
-      this.pushScoreEvents(scoreEvents);
+      this.pushScoreEvents(scoreEvents, scorePopupImpactDelay(projectile.id));
       if (directResult) {
         this.markProjectileSpectacleFocus(point, directResult);
         this.focusSpectacleOn(point, directResult, 120, true);
+        this.explosion.play(point, gravityImpactVisualRadius(active, directResult), directResult.dustColors, {
+          projectileId: projectile.id,
+          result: directResult,
+          powerScale: active.powerScale,
+          sizeScale: active.sizeScale,
+          hitMaterialId: hitObject?.materialId,
+          impactDirection: directionVector,
+          role: "primary"
+        });
         if (directResult.dustColors.length > 0) {
           this.particles.cityDebrisSpray(point, directResult.dustColors, 0.8 + directResult.fracturedBodies * 0.08);
         }
       } else {
         this.focusProjectileSpectacle(point);
+        this.explosion.play(point, gravityImpactVisualRadius(active, null), [projectile.color], {
+          projectileId: projectile.id,
+          powerScale: active.powerScale,
+          sizeScale: active.sizeScale,
+          hitMaterialId: hitObject?.materialId,
+          impactDirection: directionVector,
+          role: "primary"
+        });
       }
       this.particles.spark(point, projectile.color, 1.35 * active.sizeScale * active.powerScale);
       this.audio.playGravityCrush(point, active.sizeScale * active.powerScale);
@@ -4117,7 +4134,7 @@ class Game {
       ...this.applyExplosionResult(result, 0, projectile.id === "ignite" ? 1.35 : projectile.id === "pulse" ? 0.35 : 0),
       ...(options.specialActive ? this.playProjectileSpecial(projectile.id, point, directionVector, options.specialActive) : [])
     ];
-    this.pushScoreEvents(scoreEvents);
+    this.pushScoreEvents(scoreEvents, scorePopupImpactDelay(projectile.id));
 
     this.explosion.play(point, visualRadius, result.dustColors, {
       projectileId: projectile.id,
@@ -4129,9 +4146,10 @@ class Game {
       role: "primary"
     });
     this.particles.cityDebrisSpray(point, result.dustColors, 1 + result.fracturedBodies * 0.085);
-    this.cameraRig.shake(PRIMARY_IMPACT_SHAKE_MAGNITUDE, PRIMARY_IMPACT_SHAKE_DURATION);
-    this.hitStopTimer = this.settings.motionEffects ? PRIMARY_IMPACT_HIT_STOP_SECONDS : 0;
-    this.slowMotionTimer = this.settings.motionEffects ? PRIMARY_IMPACT_SLOWMO_SECONDS : 0;
+    const shake = projectileImpactShake(projectile.id);
+    this.cameraRig.shake(shake.magnitude, shake.duration);
+    this.hitStopTimer = this.settings.motionEffects ? projectileImpactHitStop(projectile.id) : 0;
+    this.slowMotionTimer = this.settings.motionEffects ? projectileImpactSlowMo(projectile.id) : 0;
     this.runState.beginSpectacle(performance.now());
     const directFractures = directResults.reduce((total, directResult) => total + directResult.fracturedBodies, 0);
     const directHits = directResults.reduce((total, directResult) => total + directResult.affectedBodies, 0);
@@ -4265,10 +4283,23 @@ class Game {
       this.markProjectileSpectacleFocus(point, result);
     }
     const scoreEvents = this.applyExplosionResult(result, 0, active.definition.id === "ignite" ? 0.9 : 0);
-    this.pushScoreEvents(scoreEvents);
+    this.pushScoreEvents(scoreEvents, active.definition.id === "gravity" ? 0.16 : scorePopupImpactDelay(active.definition.id));
 
     if (result.dustColors.length > 0) {
       this.particles.cityDebrisSpray(point, result.dustColors, 0.42 + result.fracturedBodies * 0.08);
+    }
+    if (active.definition.id === "gravity" && result.fracturedBodies > 0) {
+      const punchVisualRadius = Math.max(2.6, active.radius * 6.4 + Math.min(2.8, result.fracturedBodies * 0.18));
+      this.explosion.play(point, punchVisualRadius, result.dustColors.length > 0 ? result.dustColors : [active.definition.color], {
+        projectileId: active.definition.id,
+        result,
+        powerScale: active.powerScale * 0.78,
+        sizeScale: active.sizeScale * 0.72,
+        densityScale: 0.48,
+        hitMaterialId: hitObject.materialId,
+        impactDirection: direction,
+        role: "secondary"
+      });
     }
     this.particles.spark(point, hitObject.materialId === "glass" ? 0xb6fbff : active.definition.color, 0.55);
     this.audio.playChainImpact({
@@ -4718,7 +4749,9 @@ class Game {
       side.set(1, 0, 0);
     }
     side.normalize();
-    const clusterCount = 4;
+    const performanceMode = this.settings.graphicsQuality === "performance";
+    const clusterCount = performanceMode ? 2 : 4;
+    const secondaryDensity = performanceMode ? 0.36 : 0.68;
     for (let i = 0; i < clusterCount; i += 1) {
       const lateral = (i - (clusterCount - 1) * 0.5) * 0.74 * active.sizeScale;
       const depth = randomRange(this.rng, 0.35, 1.42) * active.sizeScale;
@@ -4734,13 +4767,14 @@ class Game {
         result: cluster,
         powerScale: 0.58 * active.powerScale,
         sizeScale: 0.52 * active.sizeScale,
-        densityScale: 0.68,
+        densityScale: secondaryDensity,
         hitMaterialId: "foam",
         impactDirection: forward,
         role: "secondary"
       });
       if (cluster.dustColors.length > 0) {
-        this.particles.cityDebrisSpray(clusterOrigin, cluster.dustColors, 0.18 + cluster.fracturedBodies * 0.025);
+        const debrisSpray = (0.18 + cluster.fracturedBodies * 0.025) * (performanceMode ? 0.65 : 1);
+        this.particles.cityDebrisSpray(clusterOrigin, cluster.dustColors, debrisSpray);
       }
       events.push(...this.applyExplosionResult(cluster, 1, 0));
     }
@@ -5640,15 +5674,78 @@ function residualBlastRadiusScale(projectileId: ProjectileId): number {
 function impactVisualRadiusScale(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "slug":
-      return 1.1;
+      return 1.42;
     case "gravity":
-      return 0.82;
+      return 1.36;
     case "pulse":
-      return 1.38;
+      return 1.68;
     case "scatter":
-      return 0.82;
+      return 1.32;
     case "ignite":
-      return 1.06;
+      return 1.42;
+  }
+}
+
+function gravityImpactVisualRadius(active: ActiveProjectile, result: ExplosionResult | null): number {
+  const fractureBoost = Math.min(2.2, (result?.fracturedBodies ?? 0) * 0.07);
+  return Math.max(7.2, active.definition.blastRadius * active.sizeScale * 9.4 + fractureBoost);
+}
+
+function projectileImpactShake(projectileId: ProjectileId): { magnitude: number; duration: number } {
+  switch (projectileId) {
+    case "slug":
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.08, duration: PRIMARY_IMPACT_SHAKE_DURATION };
+    case "scatter":
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 0.96, duration: PRIMARY_IMPACT_SHAKE_DURATION * 0.82 };
+    case "pulse":
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.14, duration: PRIMARY_IMPACT_SHAKE_DURATION * 0.9 };
+    case "gravity":
+      return { magnitude: GRAVITY_IMPACT_SHAKE_MAGNITUDE, duration: GRAVITY_IMPACT_SHAKE_DURATION };
+    case "ignite":
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.18, duration: PRIMARY_IMPACT_SHAKE_DURATION * 1.05 };
+  }
+}
+
+function projectileImpactHitStop(projectileId: ProjectileId): number {
+  switch (projectileId) {
+    case "scatter":
+      return PRIMARY_IMPACT_HIT_STOP_SECONDS * 0.82;
+    case "pulse":
+      return PRIMARY_IMPACT_HIT_STOP_SECONDS * 0.9;
+    case "gravity":
+      return GRAVITY_IMPACT_HIT_STOP_SECONDS;
+    case "slug":
+    case "ignite":
+      return PRIMARY_IMPACT_HIT_STOP_SECONDS * 1.08;
+  }
+}
+
+function projectileImpactSlowMo(projectileId: ProjectileId): number {
+  switch (projectileId) {
+    case "scatter":
+      return PRIMARY_IMPACT_SLOWMO_SECONDS * 0.78;
+    case "pulse":
+      return PRIMARY_IMPACT_SLOWMO_SECONDS * 0.88;
+    case "gravity":
+      return GRAVITY_IMPACT_SLOWMO_SECONDS;
+    case "slug":
+    case "ignite":
+      return PRIMARY_IMPACT_SLOWMO_SECONDS * 1.08;
+  }
+}
+
+function scorePopupImpactDelay(projectileId: ProjectileId): number {
+  switch (projectileId) {
+    case "slug":
+      return 0.28;
+    case "scatter":
+      return 0.24;
+    case "pulse":
+      return 0.34;
+    case "gravity":
+      return 0.2;
+    case "ignite":
+      return 0.26;
   }
 }
 

@@ -5,6 +5,7 @@ interface ScorePopup {
   element: HTMLDivElement;
   position: THREE.Vector3;
   life: number;
+  delay: number;
   maxLife: number;
   maxOpacity: number;
   visible: boolean;
@@ -33,6 +34,7 @@ export class ScorePopupLayer {
   private readonly scratch = new THREE.Vector3();
   private readonly updateViewport = () => this.refreshViewport();
   private chainMeterLife = 0;
+  private chainMeterDelay = 0;
   private chainMeterVisible = false;
   private chainGoal: ChainGoal | null = null;
   private viewportWidth = window.innerWidth;
@@ -54,11 +56,11 @@ export class ScorePopupLayer {
     window.visualViewport?.addEventListener("scroll", this.updateViewport);
   }
 
-  push(events: ScoreEvent[]): void {
+  push(events: ScoreEvent[], revealDelay = 0): void {
     const sorted = [...events].sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
     const topChain = sorted.find((event) => event.kind === "chain" && event.combo);
     if (topChain) {
-      this.showChainMeter(topChain);
+      this.showChainMeter(topChain, revealDelay);
     }
 
     const compact = this.isCompactViewport();
@@ -94,6 +96,7 @@ export class ScorePopupLayer {
         element,
         position: event.position.clone(),
         life: 0,
+        delay: revealDelay,
         maxLife: event.kind === "chain" ? 2.3 + Math.min(0.7, ((event.combo ?? 1) - 1) * 0.16) : 2.15,
         maxOpacity: event.kind === "chain" ? 0.9 : 0.84,
         visible: true
@@ -107,10 +110,12 @@ export class ScorePopupLayer {
     this.chainGoal = goal && goal.minimum > 0 ? { ...goal } : null;
   }
 
-  showChainMilestone(label: string, combo: number): void {
+  showChainMilestone(label: string, combo: number, revealDelay = 0): void {
     this.chainMeterLife = 3.4;
+    this.chainMeterDelay = revealDelay;
     this.chainMeter.className = `chain-meter is-visible ${chainPopupClass(combo)}`;
     this.chainMeterVisible = true;
+    this.setChainMeterVisible(revealDelay <= 0);
     const progress = this.chainGoal ? `${Math.min(combo, this.chainGoal.minimum)}/${this.chainGoal.minimum}` : String(combo);
     this.chainMeter.replaceChildren(
       chainMeterLine("span", `CHAIN MILESTONE ${progress}`),
@@ -120,7 +125,10 @@ export class ScorePopupLayer {
   }
 
   update(deltaSeconds: number, camera: THREE.Camera): void {
-    if (this.chainMeterLife > 0) {
+    if (this.chainMeterDelay > 0) {
+      this.chainMeterDelay = Math.max(0, this.chainMeterDelay - deltaSeconds);
+      this.setChainMeterVisible(false);
+    } else if (this.chainMeterLife > 0) {
       this.chainMeterLife = Math.max(0, this.chainMeterLife - deltaSeconds);
       this.setChainMeterVisible(this.chainMeterLife > 0);
     }
@@ -128,7 +136,12 @@ export class ScorePopupLayer {
     for (let i = this.popups.length - 1; i >= 0; i -= 1) {
       const popup = this.popups[i];
       popup.life += deltaSeconds;
-      const t = popup.life / popup.maxLife;
+      const activeLife = popup.life - popup.delay;
+      if (activeLife < 0) {
+        popup.element.style.opacity = "0";
+        continue;
+      }
+      const t = activeLife / popup.maxLife;
       if (t >= 1) {
         popup.element.remove();
         this.popups.splice(i, 1);
@@ -159,6 +172,7 @@ export class ScorePopupLayer {
     }
     this.popups.length = 0;
     this.chainMeterLife = 0;
+    this.chainMeterDelay = 0;
     this.chainMeterVisible = false;
     this.chainMeter.className = "chain-meter";
     this.chainMeter.replaceChildren();
@@ -172,10 +186,12 @@ export class ScorePopupLayer {
     this.root.remove();
   }
 
-  private showChainMeter(event: ScoreEvent): void {
+  private showChainMeter(event: ScoreEvent, revealDelay = 0): void {
     const combo = event.combo ?? 1;
     this.chainMeterLife = 2.9;
+    this.chainMeterDelay = revealDelay;
     this.chainMeter.className = `chain-meter is-visible ${chainPopupClass(combo)}`;
+    this.setChainMeterVisible(revealDelay <= 0);
     this.chainMeterVisible = true;
     const progress = this.chainGoal ? `${Math.min(combo, this.chainGoal.minimum)}/${this.chainGoal.minimum}` : String(combo);
     const source = chainSourceText(event.label, combo);
