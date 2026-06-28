@@ -3416,9 +3416,14 @@ function spawnBuildingStack(context: LevelContext, spec: BuildingSpec): void {
         style: spec.style,
         brand: spec.brand,
         floor: floor + groupFloors - 1,
+        floorBase: floor,
         column,
+        groupFloors,
+        groupColumns,
         floors: spec.floors,
-        columns: spec.columns
+        columns: spec.columns,
+        stackCellSize: spec.size,
+        stagger: spec.stagger ?? 0
       });
       if (shouldShowBuildingHazardIndicator(spec, floor, column)) {
         decorateHazardIndicator(object.mesh, {
