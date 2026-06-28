@@ -292,6 +292,38 @@ const ELEVATED_METRO_LOOP: Array<[number, number]> = [
 ];
 const ELEVATED_METRO_DECK_Y = 3.08;
 const ELEVATED_METRO_TRAIN_Y = 3.58;
+const ELEVATED_METRO_PLACEMENT_HALF_WIDTH = 0.74;
+const ELEVATED_METRO_PLACEMENT_BLOCKERS: CityRoadCorridor[] = [
+  {
+    axis: "z",
+    minX: ELEVATED_METRO_LOOP[0][0] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxX: ELEVATED_METRO_LOOP[1][0] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    minZ: ELEVATED_METRO_LOOP[0][1] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxZ: ELEVATED_METRO_LOOP[0][1] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH
+  },
+  {
+    axis: "z",
+    minX: ELEVATED_METRO_LOOP[3][0] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxX: ELEVATED_METRO_LOOP[2][0] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    minZ: ELEVATED_METRO_LOOP[2][1] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxZ: ELEVATED_METRO_LOOP[2][1] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH
+  },
+  {
+    axis: "x",
+    minX: ELEVATED_METRO_LOOP[0][0] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxX: ELEVATED_METRO_LOOP[0][0] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    minZ: ELEVATED_METRO_LOOP[0][1] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxZ: ELEVATED_METRO_LOOP[3][1] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH
+  },
+  {
+    axis: "x",
+    minX: ELEVATED_METRO_LOOP[1][0] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxX: ELEVATED_METRO_LOOP[1][0] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    minZ: ELEVATED_METRO_LOOP[1][1] - ELEVATED_METRO_PLACEMENT_HALF_WIDTH,
+    maxZ: ELEVATED_METRO_LOOP[2][1] + ELEVATED_METRO_PLACEMENT_HALF_WIDTH
+  }
+];
+const CITY_PLACEMENT_BLOCKERS: CityRoadCorridor[] = [...CITY_ROAD_CORRIDORS, ...ELEVATED_METRO_PLACEMENT_BLOCKERS];
 
 function trafficLoop(points: Array<[number, number]>, speed: number, segmentIndex = 0): TrafficRoute {
   const normalizedSegmentIndex = normalizeLoopSegmentIndex(segmentIndex, points.length);
@@ -3299,7 +3331,7 @@ function scaleCityBuildingHeight(spec: BuildingSpec): BuildingSpec {
 function alignBuildingToCityRoadEdges(spec: BuildingSpec): THREE.Vector3 {
   const position = spec.position.clone();
   const footprint = cityBuildingFootprint(spec);
-  return alignFootprintToCityRoadEdges(position, footprint, CITY_ROAD_CLEARANCE);
+  return alignFootprintToCityPlacementBlockers(position, footprint, CITY_ROAD_CLEARANCE);
 }
 
 function alignCityObjectToRoadEdges(
@@ -3308,35 +3340,77 @@ function alignCityObjectToRoadEdges(
   rotationY = 0,
   clearance = CITY_ROAD_CLEARANCE
 ): THREE.Vector3 {
-  return alignFootprintToCityRoadEdges(position, cityObjectFootprint(size, rotationY), clearance);
+  return alignFootprintToCityPlacementBlockers(position, cityObjectFootprint(size, rotationY), clearance);
 }
 
-function alignFootprintToCityRoadEdges(position: THREE.Vector3, footprint: { x: number; z: number }, clearance: number): THREE.Vector3 {
+function alignFootprintToCityPlacementBlockers(position: THREE.Vector3, footprint: { x: number; z: number }, clearance: number): THREE.Vector3 {
+  return alignFootprintToBlockers(position, footprint, CITY_PLACEMENT_BLOCKERS, clearance);
+}
+
+function alignFootprintToBlockers(
+  position: THREE.Vector3,
+  footprint: { x: number; z: number },
+  blockers: readonly CityRoadCorridor[],
+  clearance: number
+): THREE.Vector3 {
   const aligned = position.clone();
-  for (let pass = 0; pass < 2; pass += 1) {
-    for (const road of CITY_ROAD_CORRIDORS) {
-      const bounds = {
-        minX: aligned.x - footprint.x * 0.5,
-        maxX: aligned.x + footprint.x * 0.5,
-        minZ: aligned.z - footprint.z * 0.5,
-        maxZ: aligned.z + footprint.z * 0.5
-      };
-      if (!boundsOverlap(bounds.minX, bounds.maxX, road.minX, road.maxX) || !boundsOverlap(bounds.minZ, bounds.maxZ, road.minZ, road.maxZ)) {
+  for (let pass = 0; pass < 6; pass += 1) {
+    let moved = false;
+    for (const blocker of blockers) {
+      const bounds = footprintBounds(aligned, footprint);
+      if (
+        !boundsOverlap(bounds.minX, bounds.maxX, blocker.minX, blocker.maxX) ||
+        !boundsOverlap(bounds.minZ, bounds.maxZ, blocker.minZ, blocker.maxZ)
+      ) {
         continue;
       }
 
-      if (road.axis === "x") {
-        const roadCenter = (road.minX + road.maxX) * 0.5;
-        const side = aligned.x <= roadCenter ? -1 : 1;
-        aligned.x = side < 0 ? road.minX - footprint.x * 0.5 - clearance : road.maxX + footprint.x * 0.5 + clearance;
+      const before = aligned.clone();
+      const after = aligned.clone();
+      if (blocker.axis === "x") {
+        before.x = blocker.minX - footprint.x * 0.5 - clearance;
+        after.x = blocker.maxX + footprint.x * 0.5 + clearance;
       } else {
-        const roadCenter = (road.minZ + road.maxZ) * 0.5;
-        const side = aligned.z <= roadCenter ? -1 : 1;
-        aligned.z = side < 0 ? road.minZ - footprint.z * 0.5 - clearance : road.maxZ + footprint.z * 0.5 + clearance;
+        before.z = blocker.minZ - footprint.z * 0.5 - clearance;
+        after.z = blocker.maxZ + footprint.z * 0.5 + clearance;
       }
+      aligned.copy(
+        alignmentCandidateScore(aligned, before, footprint, blockers) <= alignmentCandidateScore(aligned, after, footprint, blockers)
+          ? before
+          : after
+      );
+      moved = true;
+    }
+    if (!moved) {
+      break;
     }
   }
   return aligned;
+}
+
+function footprintBounds(position: THREE.Vector3, footprint: { x: number; z: number }): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  return {
+    minX: position.x - footprint.x * 0.5,
+    maxX: position.x + footprint.x * 0.5,
+    minZ: position.z - footprint.z * 0.5,
+    maxZ: position.z + footprint.z * 0.5
+  };
+}
+
+function alignmentCandidateScore(
+  current: THREE.Vector3,
+  candidate: THREE.Vector3,
+  footprint: { x: number; z: number },
+  blockers: readonly CityRoadCorridor[]
+): number {
+  const bounds = footprintBounds(candidate, footprint);
+  let overlapPenalty = 0;
+  for (const blocker of blockers) {
+    if (boundsOverlap(bounds.minX, bounds.maxX, blocker.minX, blocker.maxX) && boundsOverlap(bounds.minZ, bounds.maxZ, blocker.minZ, blocker.maxZ)) {
+      overlapPenalty += 1;
+    }
+  }
+  return current.distanceToSquared(candidate) + overlapPenalty * 10_000;
 }
 
 function cityBuildingFootprint(spec: BuildingSpec): { x: number; z: number } {
@@ -3939,6 +4013,15 @@ function spawnStreetSetpieces(context: LevelContext): void {
   ] as const;
 
   for (const [label, materialId, x, z, width, height, depth, rotationY] of streetCargo) {
+    addStreetCargo(context, label, materialId, new THREE.Vector3(x, height * 0.5, z), new THREE.Vector3(width, height, depth), rotationY);
+  }
+
+  const streetDressing = [
+    ["Sidewalk transformer cabinet", "metal", -8.85, -1.05, 0.42, 0.72, 0.34, Math.PI * 0.5],
+    ["Bus shelter panel", "glass", 6.55, -0.1, 0.74, 0.5, 0.18, Math.PI * 0.5]
+  ] as const;
+
+  for (const [label, materialId, x, z, width, height, depth, rotationY] of streetDressing) {
     addStreetCargo(context, label, materialId, new THREE.Vector3(x, height * 0.5, z), new THREE.Vector3(width, height, depth), rotationY);
   }
 

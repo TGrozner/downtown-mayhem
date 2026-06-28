@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { BUILDING_KIT_PROFILES, type BuildingKitProfile } from "./generated/buildingKit";
 import type { MaterialId } from "./materialCatalog";
 import { perfMonitor } from "./perf";
 import type { ScoreRole } from "./physics";
@@ -84,25 +85,27 @@ interface DetailRootUserData {
 
 export function decorateBuildingCell(mesh: THREE.Mesh, options: BuildingCellVisualOptions): void {
   const palette = paletteFor(options.style, options.scoreRole);
+  const profile = buildingKitProfile(options.style);
   const detail = facadeDetailFor(options);
   if (options.scoreRole === "neutral") {
-    decorateNeutralBuildingCell(mesh, options, palette);
+    decorateNeutralBuildingCell(mesh, options, palette, profile);
     mergeOpaqueDecorativeChildrenByMaterial(mesh);
     return;
   }
-  addFacadeSkin(mesh, options.size, palette.facade, FACADE_DEPTH);
+  addFacadeSkin(mesh, options.size, palette.facade, FACADE_DEPTH, profile);
   if (options.floor === 0 || options.floor === options.floors - 1) {
-    addCellSlabBands(mesh, options, palette.trim, detail === "full" ? "full" : "lean");
+    addCellSlabBands(mesh, options, palette.trim, profile, detail === "full" ? "full" : "lean");
   }
-  addWindowRows(mesh, options);
+  addKitRelief(mesh, options, profile, palette.trim, detail);
+  addWindowRows(mesh, options, profile);
   addVerticalTrim(mesh, options.size, palette.trim, options.column === 0, options.column === options.columns - 1);
   addPremiumFacadeDetails(mesh, options, palette.sign);
 
   if (options.floor === 0) {
-    addStorefront(mesh, options.size, palette.sign, options.style, options.column, palette.trim);
+    addStorefront(mesh, options.size, palette.sign, options.style, options.column, palette.trim, profile);
   }
   if (options.floor === options.floors - 1) {
-    addRoofDetail(mesh, options, palette.roof);
+    addRoofDetail(mesh, options, palette.roof, profile);
   }
   mergeOpaqueDecorativeChildrenByMaterial(mesh);
 }
@@ -110,7 +113,8 @@ export function decorateBuildingCell(mesh: THREE.Mesh, options: BuildingCellVisu
 function decorateNeutralBuildingCell(
   mesh: THREE.Mesh,
   options: BuildingCellVisualOptions,
-  palette: { facade: THREE.Material; trim: THREE.Material; roof: THREE.Material; sign: THREE.Material }
+  palette: { facade: THREE.Material; trim: THREE.Material; roof: THREE.Material; sign: THREE.Material },
+  profile: BuildingKitProfile
 ): void {
   const isGround = options.floor <= 1;
   const isTop = options.floor >= options.floors - 1;
@@ -118,14 +122,17 @@ function decorateNeutralBuildingCell(
   const isFeatureBand = (options.floor + options.column) % 4 === 0;
 
   if (isGround || isTop || (isEdgeColumn && isFeatureBand)) {
-    addNeutralFacadeSkin(mesh, options.size, palette.facade);
+    addNeutralFacadeSkin(mesh, options.size, palette.facade, profile);
     if (isGround || isTop) {
-      addCellSlabBands(mesh, options, palette.trim, "lean");
+      addCellSlabBands(mesh, options, palette.trim, profile, "lean");
     }
-    addNeutralWindowBand(mesh, options, palette.trim);
+    if (isGround || isTop) {
+      addKitRelief(mesh, options, profile, palette.trim, "lean");
+    }
+    addNeutralWindowBand(mesh, options, palette.trim, profile);
   }
   if (isGround && (options.column % 2 === 0 || isEdgeColumn)) {
-    addNeutralStorefront(mesh, options.size, palette.sign, options.style);
+    addNeutralStorefront(mesh, options.size, palette.sign, options.style, profile);
   }
   if (options.brand && (isGround || isTop) && options.column === 0) {
     addFauxBrandSign(mesh, options.size, options.brand, isTop ? "crown" : "storefront");
@@ -134,7 +141,7 @@ function decorateNeutralBuildingCell(
     addFacadeDepthBreaks(mesh, options, palette.trim);
   }
   if (isTop) {
-    addNeutralRoofDetail(mesh, options.size, palette.roof);
+    addNeutralRoofDetail(mesh, options.size, palette.roof, profile);
   }
 }
 
@@ -146,6 +153,12 @@ export function fragmentDecorationParts(options: FragmentVisualOptions): Fragmen
         offset: new THREE.Vector3(0, options.size.y * 0.18, options.size.z * 0.08),
         rotation: new THREE.Euler(),
         material: material("glass_shard")
+      },
+      {
+        size: new THREE.Vector3(options.size.x * 0.34, Math.max(0.01, options.size.y * 0.18), options.size.z * 1.04),
+        offset: new THREE.Vector3(-options.size.x * 0.22, -options.size.y * 0.12, options.size.z * 0.12),
+        rotation: new THREE.Euler(0, 0, -Math.PI * 0.12),
+        material: material("glass_shard")
       }
     ];
   }
@@ -156,6 +169,12 @@ export function fragmentDecorationParts(options: FragmentVisualOptions): Fragmen
         size: new THREE.Vector3(options.size.x * 0.38, options.size.y * 0.38, options.size.z * 1.22),
         offset: new THREE.Vector3(options.size.x * 0.12, options.size.y * 0.08, 0),
         rotation: new THREE.Euler(0, 0, Math.PI * 0.08),
+        material: material("scraped_metal")
+      },
+      {
+        size: new THREE.Vector3(Math.max(0.025, options.size.x * 0.08), options.size.y * 0.78, Math.max(0.025, options.size.z * 0.08)),
+        offset: new THREE.Vector3(-options.size.x * 0.32, 0, options.size.z * 0.34),
+        rotation: new THREE.Euler(0, 0, -Math.PI * 0.08),
         material: material("scraped_metal")
       }
     ];
@@ -174,6 +193,12 @@ export function fragmentDecorationParts(options: FragmentVisualOptions): Fragmen
         offset: new THREE.Vector3(options.size.x * 0.3, -options.size.y * 0.18, -options.size.z * 0.38),
         rotation: new THREE.Euler(),
         material: material("rubble_light")
+      },
+      {
+        size: new THREE.Vector3(Math.max(0.025, options.size.x * 0.08), Math.max(0.025, options.size.y * 0.08), options.size.z * 1.08),
+        offset: new THREE.Vector3(-options.size.x * 0.28, options.size.y * 0.04, options.size.z * 0.06),
+        rotation: new THREE.Euler(0, 0, Math.PI * 0.05),
+        material: material("scraped_metal")
       }
     ];
   }
@@ -185,6 +210,12 @@ export function fragmentDecorationParts(options: FragmentVisualOptions): Fragmen
         offset: new THREE.Vector3(options.size.x * 0.4, 0, 0),
         rotation: new THREE.Euler(0, Math.PI * 0.04, 0),
         material: material("wood_end")
+      },
+      {
+        size: new THREE.Vector3(options.size.x * 0.14, options.size.y * 0.68, options.size.z * 0.22),
+        offset: new THREE.Vector3(-options.size.x * 0.32, options.size.y * 0.08, options.size.z * 0.34),
+        rotation: new THREE.Euler(0, -Math.PI * 0.12, Math.PI * 0.07),
+        material: material("wood_end")
       }
     ];
   }
@@ -195,6 +226,12 @@ export function fragmentDecorationParts(options: FragmentVisualOptions): Fragmen
         size: new THREE.Vector3(options.size.x * 0.7, options.size.y * 0.16, options.size.z * 0.7),
         offset: new THREE.Vector3(0, options.size.y * 0.42, 0),
         rotation: new THREE.Euler(),
+        material: material("painted_plastic")
+      },
+      {
+        size: new THREE.Vector3(options.size.x * 0.48, options.size.y * 0.12, options.size.z * 0.42),
+        offset: new THREE.Vector3(options.size.x * 0.18, -options.size.y * 0.28, options.size.z * 0.24),
+        rotation: new THREE.Euler(0, 0, -Math.PI * 0.06),
         material: material("painted_plastic")
       }
     ];
@@ -816,17 +853,28 @@ function facadeDetailFor(options: BuildingCellVisualOptions): "full" | "standard
   return (options.floor + options.column) % 3 === 0 ? "standard" : "lean";
 }
 
-function addFacadeSkin(mesh: THREE.Mesh, size: THREE.Vector3, materialRef: THREE.Material, depth: number): void {
-  addChildBox(mesh, size.x * 0.96, size.y * 0.92, depth, materialRef, {
+function buildingKitProfile(style: BuildingVisualStyle): BuildingKitProfile {
+  return BUILDING_KIT_PROFILES[style];
+}
+
+function addFacadeSkin(
+  mesh: THREE.Mesh,
+  size: THREE.Vector3,
+  materialRef: THREE.Material,
+  depth: number,
+  profile: BuildingKitProfile
+): void {
+  const facade = profile.facade;
+  addChildBox(mesh, size.x * facade.frontWidth, size.y * facade.frontHeight, depth, materialRef, {
     z: frontLayerZ(size, depth, FRONT_SKIN_OFFSET)
   });
-  addChildBox(mesh, size.x * 0.92, size.y * 0.82, depth, materialRef, {
+  addChildBox(mesh, size.x * facade.backWidth, size.y * facade.backHeight, depth, materialRef, {
     z: backLayerZ(size, depth, FRONT_SKIN_OFFSET)
   });
-  addChildBox(mesh, depth, size.y * 0.76, size.z * 0.82, materialRef, {
+  addChildBox(mesh, depth, size.y * facade.sideHeight, size.z * facade.sideDepth, materialRef, {
     x: leftLayerX(size, depth, SIDE_SKIN_OFFSET)
   });
-  addChildBox(mesh, depth, size.y * 0.76, size.z * 0.82, materialRef, {
+  addChildBox(mesh, depth, size.y * facade.sideHeight, size.z * facade.sideDepth, materialRef, {
     x: rightLayerX(size, depth, SIDE_SKIN_OFFSET)
   });
 }
@@ -835,12 +883,14 @@ function addCellSlabBands(
   mesh: THREE.Mesh,
   options: BuildingCellVisualOptions,
   trimMaterial: THREE.Material,
+  profile: BuildingKitProfile,
   detail: "full" | "lean" = "full"
 ): void {
   const size = options.size;
   const z = frontLayerZ(size, TRIM_DEPTH, FRONT_TRIM_OFFSET);
-  const bandHeight = Math.max(0.022, size.y * 0.045);
-  const width = size.x * (detail === "lean" ? 0.78 : 0.96);
+  const massing = profile.massing;
+  const bandHeight = Math.max(0.022, size.y * (options.floor === 0 ? massing.baseHeight : massing.crownHeight) * 0.42);
+  const width = size.x * (detail === "lean" ? Math.min(0.86, massing.crownWidth) : massing.crownWidth);
   addChildBox(mesh, width, bandHeight, TRIM_DEPTH, trimMaterial, {
     y: -size.y * 0.5 + bandHeight * 0.55,
     z
@@ -851,28 +901,80 @@ function addCellSlabBands(
   });
 
   if (options.floor === 0) {
-    addFoundationBand(mesh, size, trimMaterial, detail);
+    addFoundationBand(mesh, size, trimMaterial, profile, detail);
   }
 }
 
-function addFoundationBand(mesh: THREE.Mesh, size: THREE.Vector3, trimMaterial: THREE.Material, detail: "full" | "lean"): void {
-  const height = Math.max(0.055, size.y * (detail === "lean" ? 0.11 : 0.14));
-  addChildBox(mesh, size.x * (detail === "lean" ? 0.82 : 1.02), height, TRIM_DEPTH, trimMaterial, {
+function addFoundationBand(
+  mesh: THREE.Mesh,
+  size: THREE.Vector3,
+  trimMaterial: THREE.Material,
+  profile: BuildingKitProfile,
+  detail: "full" | "lean"
+): void {
+  const massing = profile.massing;
+  const height = Math.max(0.055, size.y * (detail === "lean" ? massing.baseHeight * 0.72 : massing.baseHeight));
+  addChildBox(mesh, size.x * (detail === "lean" ? Math.min(0.86, massing.baseWidth) : massing.baseWidth), height, TRIM_DEPTH, trimMaterial, {
     y: -size.y * 0.5 + height * 0.5,
     z: frontLayerZ(size, TRIM_DEPTH, FRONT_TRIM_OFFSET + 0.012)
   });
   if (detail === "full") {
-    addChildBox(mesh, TRIM_DEPTH, height * 0.86, size.z * 0.82, trimMaterial, {
+    addChildBox(mesh, TRIM_DEPTH, height * 0.86, size.z * massing.sideReturn, trimMaterial, {
       x: leftLayerX(size, TRIM_DEPTH, SIDE_TRIM_OFFSET)
     });
-    addChildBox(mesh, TRIM_DEPTH, height * 0.86, size.z * 0.82, trimMaterial, {
+    addChildBox(mesh, TRIM_DEPTH, height * 0.86, size.z * massing.sideReturn, trimMaterial, {
       x: rightLayerX(size, TRIM_DEPTH, SIDE_TRIM_OFFSET)
     });
   }
 }
 
-function addNeutralFacadeSkin(mesh: THREE.Mesh, size: THREE.Vector3, materialRef: THREE.Material): void {
-  addChildBox(mesh, size.x * 0.94, size.y * 0.86, FACADE_DEPTH, materialRef, {
+function addKitRelief(
+  mesh: THREE.Mesh,
+  options: BuildingCellVisualOptions,
+  profile: BuildingKitProfile,
+  trimMaterial: THREE.Material,
+  detail: "full" | "standard" | "lean"
+): void {
+  if (detail === "lean" && options.scoreRole !== "target") {
+    return;
+  }
+  const size = options.size;
+  const ribWidth = detail === "full" ? 0.024 : 0.016;
+  const ribHeight = size.y * (detail === "full" ? 0.78 : 0.56);
+  const z = frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET - 0.004);
+  const ribLimit = detail === "full" ? profile.frontRibs.length : Math.min(2, profile.frontRibs.length);
+  for (let index = 0; index < ribLimit; index += 1) {
+    const x = profile.frontRibs[index] * size.x;
+    addChildBox(mesh, ribWidth, ribHeight, DECAL_DEPTH, trimMaterial, {
+      x,
+      y: 0,
+      z
+    });
+  }
+  if (detail === "full" || options.floor === 0 || options.floor === options.floors - 1) {
+    for (const yRatio of profile.horizontalBands) {
+      addChildBox(mesh, size.x * 0.82, Math.max(0.012, size.y * 0.026), DECAL_DEPTH, trimMaterial, {
+        y: size.y * yRatio,
+        z: z + 0.004
+      });
+    }
+  }
+  if (detail === "full") {
+    for (const zRatio of profile.sideRibs) {
+      addChildBox(mesh, DECAL_DEPTH, size.y * 0.52, Math.max(0.018, size.z * 0.024), trimMaterial, {
+        x: leftLayerX(size, DECAL_DEPTH, SIDE_TRIM_OFFSET + 0.012),
+        z: size.z * zRatio
+      });
+      addChildBox(mesh, DECAL_DEPTH, size.y * 0.52, Math.max(0.018, size.z * 0.024), trimMaterial, {
+        x: rightLayerX(size, DECAL_DEPTH, SIDE_TRIM_OFFSET + 0.012),
+        z: size.z * zRatio
+      });
+    }
+  }
+}
+
+function addNeutralFacadeSkin(mesh: THREE.Mesh, size: THREE.Vector3, materialRef: THREE.Material, profile: BuildingKitProfile): void {
+  addChildBox(mesh, size.x * profile.facade.frontWidth * 0.96, size.y * profile.facade.frontHeight * 0.92, FACADE_DEPTH, materialRef, {
     z: frontLayerZ(size, FACADE_DEPTH, FRONT_SKIN_OFFSET)
   });
 }
@@ -880,10 +982,11 @@ function addNeutralFacadeSkin(mesh: THREE.Mesh, size: THREE.Vector3, materialRef
 function addNeutralWindowBand(
   mesh: THREE.Mesh,
   options: BuildingCellVisualOptions,
-  mullionMaterial: THREE.Material
+  mullionMaterial: THREE.Material,
+  profile: BuildingKitProfile
 ): void {
   const variant = buildingVariant(options);
-  addFacadeModule(mesh, options, 0, options.size.y * 0.08, options.size.x * 0.56, options.size.y * 0.22, variant, "lean", mullionMaterial);
+  addFacadeModule(mesh, options, profile, 0, options.size.y * profile.windows.yOffset, options.size.x * 0.56, options.size.y * 0.22, variant, "lean", mullionMaterial);
   if (options.style === "industrial" || options.style === "warehouse" || options.style === "utility") {
     addChildBox(mesh, options.size.x * 0.62, 0.024, TRIM_DEPTH, mullionMaterial, {
       y: -options.size.y * 0.15,
@@ -892,50 +995,59 @@ function addNeutralWindowBand(
   }
 }
 
-function addNeutralStorefront(mesh: THREE.Mesh, size: THREE.Vector3, signMaterial: THREE.Material, style: BuildingVisualStyle): void {
-  addChildBox(mesh, size.x * 0.66, 0.075, DECAL_DEPTH, signMaterial, {
-    y: -size.y * 0.27,
+function addNeutralStorefront(
+  mesh: THREE.Mesh,
+  size: THREE.Vector3,
+  signMaterial: THREE.Material,
+  style: BuildingVisualStyle,
+  profile: BuildingKitProfile
+): void {
+  const storefront = profile.storefront;
+  addChildBox(mesh, size.x * storefront.signWidth * 0.82, 0.075, DECAL_DEPTH, signMaterial, {
+    y: size.y * storefront.signY,
     z: frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET)
   });
   if (style === "market" || style === "apartment") {
-    addChildBox(mesh, size.x * 0.48, 0.11, GLASS_DEPTH, material("shop_glass"), {
+    addChildBox(mesh, size.x * storefront.glassWidth * 0.78, Math.max(0.08, size.y * storefront.glassHeight * 0.72), GLASS_DEPTH, material("shop_glass"), {
       y: -size.y * 0.08,
       z: frontLayerZ(size, GLASS_DEPTH, FRONT_GLASS_OFFSET)
     });
   }
 }
 
-function addNeutralRoofDetail(mesh: THREE.Mesh, size: THREE.Vector3, roofMaterial: THREE.Material): void {
-  addChildBox(mesh, size.x * 1.05, 0.045, size.z * 1.05, roofMaterial, { y: size.y * 0.5 + 0.034 });
-  addChildBox(mesh, size.x * 0.36, 0.05, size.z * 0.18, material("roof_unit"), {
+function addNeutralRoofDetail(mesh: THREE.Mesh, size: THREE.Vector3, roofMaterial: THREE.Material, profile: BuildingKitProfile): void {
+  const roof = profile.roof;
+  addChildBox(mesh, size.x * roof.capWidth, 0.045, size.z * roof.capDepth, roofMaterial, { y: size.y * 0.5 + 0.034 });
+  addChildBox(mesh, size.x * roof.mechanicalWidth * 0.78, 0.05, size.z * roof.mechanicalDepth, material("roof_unit"), {
     x: -size.x * 0.14,
     y: size.y * 0.5 + 0.084,
     z: size.z * 0.08
   });
 }
 
-function addWindowRows(mesh: THREE.Mesh, options: BuildingCellVisualOptions): void {
+function addWindowRows(mesh: THREE.Mesh, options: BuildingCellVisualOptions, profile: BuildingKitProfile): void {
   const detail = facadeDetailFor(options);
-  const rows = options.style === "warehouse" || options.style === "utility" ? 1 : 2;
-  const columns = options.style === "glassTower" ? 3 : options.style === "civic" ? 2 : 2;
+  const windowProfile = profile.windows;
+  const rows = windowProfile.rows;
+  const columns = windowProfile.columns;
   const mullionMaterial = material(options.scoreRole === "target" ? "hazard_trim" : "dark_trim");
-  const usableWidth = options.size.x * (options.style === "glassTower" ? 0.78 : 0.7);
-  const usableHeight = options.size.y * (options.style === "glassTower" ? 0.6 : options.style === "warehouse" ? 0.34 : 0.5);
+  const usableWidth = options.size.x * windowProfile.usableWidth;
+  const usableHeight = options.size.y * windowProfile.usableHeight;
   const width = usableWidth / columns;
   const height = usableHeight / rows;
   const variant = buildingVariant(options);
-  const windowMaterial = material(facadeGlassMaterial(options.style, variant));
+  const windowMaterial = material(windowGlassMaterial(windowProfile.glass, variant));
 
   for (let row = 0; row < rows; row += 1) {
     for (let column = 0; column < columns; column += 1) {
-      const x = (column - (columns - 1) * 0.5) * width * 1.18;
-      const y = (row - (rows - 1) * 0.5) * height * 1.2 + options.size.y * (options.style === "warehouse" ? 0.08 : 0.1);
-      addChildBox(mesh, width * 0.76, height * (options.style === "glassTower" ? 0.86 : 0.66), GLASS_DEPTH, windowMaterial, {
+      const x = (column - (columns - 1) * 0.5) * width * windowProfile.xSpread;
+      const y = (row - (rows - 1) * 0.5) * height * windowProfile.ySpread + options.size.y * windowProfile.yOffset;
+      addChildBox(mesh, width * windowProfile.widthScale, height * windowProfile.heightScale, GLASS_DEPTH, windowMaterial, {
         x,
         y,
         z: frontLayerZ(options.size, GLASS_DEPTH, FRONT_GLASS_OFFSET + 0.004)
       });
-      if (detail === "full") {
+      if (detail === "full" && windowProfile.frame !== "lean") {
         addChildBox(mesh, width * 0.82, Math.max(0.012, height * 0.04), DECAL_DEPTH, mullionMaterial, {
           x,
           y: y - height * 0.38,
@@ -962,6 +1074,7 @@ function addWindowRows(mesh: THREE.Mesh, options: BuildingCellVisualOptions): vo
 function addFacadeModule(
   mesh: THREE.Mesh,
   options: BuildingCellVisualOptions,
+  profile: BuildingKitProfile,
   x: number,
   y: number,
   width: number,
@@ -971,30 +1084,34 @@ function addFacadeModule(
   trimMaterial: THREE.Material
 ): void {
   const size = options.size;
-  const glassMaterial = facadeGlassMaterial(options.style, variant);
+  const windowProfile = profile.windows;
+  const glassMaterial = windowGlassMaterial(windowProfile.glass, variant);
   const frameZ = frontLayerZ(size, TRIM_DEPTH, FRONT_TRIM_OFFSET + 0.006);
   const glassZ = frontLayerZ(size, GLASS_DEPTH, FRONT_GLASS_OFFSET + 0.004);
   const mullionZ = frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET + 0.004);
   const frameWidth = Math.max(0.035, width);
   const frameHeight = Math.max(0.055, height);
-  const glassWidthScale = options.style === "glassTower" ? 0.86 : 0.72;
-  const glassHeightScale = options.style === "glassTower" ? 0.86 : 0.68;
+  const glassWidthScale = Math.min(0.9, windowProfile.widthScale + 0.04);
+  const glassHeightScale = Math.min(0.9, windowProfile.heightScale + 0.06);
 
-  if (options.floor === 0 || options.floor === options.floors - 1 || detail === "full") {
+  const drawFrame =
+    windowProfile.frame === "full" ||
+    (windowProfile.frame === "standard" && (options.floor === 0 || options.floor === options.floors - 1 || detail === "full"));
+  if (drawFrame) {
     addChildBox(mesh, frameWidth, frameHeight, TRIM_DEPTH, trimMaterial, { x, y, z: frameZ });
   }
   addChildBox(mesh, frameWidth * glassWidthScale, frameHeight * glassHeightScale, GLASS_DEPTH, glassMaterial, { x, y, z: glassZ });
 
   const mullionWidth = Math.max(0.012, frameWidth * (options.style === "glassTower" ? 0.035 : 0.05));
   const mullionHeight = Math.max(0.012, frameHeight * 0.055);
-  if (detail !== "lean") {
+  if (detail !== "lean" && windowProfile.frame !== "lean") {
     addChildBox(mesh, mullionWidth, frameHeight * 0.72, DECAL_DEPTH, trimMaterial, { x, y, z: mullionZ });
     if (options.style !== "warehouse" && options.style !== "utility") {
       addChildBox(mesh, frameWidth * 0.72, mullionHeight, DECAL_DEPTH, trimMaterial, { x, y, z: mullionZ + 0.003 });
     }
   }
 
-  if (detail === "full" && options.style !== "glassTower") {
+  if (detail === "full" && windowProfile.frame === "full" && options.style !== "glassTower") {
     const sillHeight = Math.max(0.016, frameHeight * 0.09);
     addChildBox(mesh, frameWidth * 1.08, sillHeight, TRIM_DEPTH, trimMaterial, {
       x,
@@ -1012,17 +1129,11 @@ function addFacadeModule(
   }
 }
 
-function facadeGlassMaterial(style: BuildingVisualStyle, variant: number): string {
+function windowGlassMaterial(preferred: BuildingKitProfile["windows"]["glass"], variant: number): string {
   if (variant % 13 === 0) {
     return "dark_window";
   }
-  if (style === "glassTower" || style === "civic" || style === "utility") {
-    return "cool_window";
-  }
-  if (style === "market") {
-    return "shop_glass";
-  }
-  return "warm_window";
+  return preferred;
 }
 
 function addWarehouseFacadeMarks(mesh: THREE.Mesh, options: BuildingCellVisualOptions, trimMaterial: THREE.Material): void {
@@ -1088,28 +1199,30 @@ function addStorefront(
   signMaterial: THREE.Material,
   style: BuildingVisualStyle,
   column: number,
-  trimMaterial: THREE.Material
+  trimMaterial: THREE.Material,
+  profile: BuildingKitProfile
 ): void {
+  const storefront = profile.storefront;
   if (style === "industrial" && column % 2 === 0) {
-    addChildBox(mesh, size.x * 0.72, 0.09, DECAL_DEPTH, signMaterial, {
-      y: -size.y * 0.24,
+    addChildBox(mesh, size.x * storefront.signWidth, 0.09, DECAL_DEPTH, signMaterial, {
+      y: size.y * storefront.signY,
       z: frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET)
     });
-    addChildBox(mesh, size.x * 0.42, size.y * 0.24, TRIM_DEPTH, trimMaterial, {
+    addChildBox(mesh, size.x * storefront.doorWidth, size.y * storefront.doorHeight, TRIM_DEPTH, trimMaterial, {
       y: -size.y * 0.08,
       z: frontLayerZ(size, TRIM_DEPTH, FRONT_TRIM_OFFSET + 0.012)
     });
     addChildBox(mesh, 0.035, size.y * 0.72, 0.035, material("service_pipe"), {
-      x: -size.x * 0.38,
+      x: size.x * storefront.pipeX,
       y: 0,
       z: frontLayerZ(size, 0.035, FRONT_DECAL_OFFSET + 0.012)
     });
   } else if (style === "warehouse") {
-    addChildBox(mesh, size.x * 0.66, 0.07, DECAL_DEPTH, signMaterial, {
-      y: -size.y * 0.28,
+    addChildBox(mesh, size.x * storefront.signWidth, 0.07, DECAL_DEPTH, signMaterial, {
+      y: size.y * storefront.signY,
       z: frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET)
     });
-    addChildBox(mesh, size.x * 0.54, size.y * 0.28, TRIM_DEPTH, trimMaterial, {
+    addChildBox(mesh, size.x * storefront.doorWidth, size.y * storefront.doorHeight, TRIM_DEPTH, trimMaterial, {
       y: -size.y * 0.08,
       z: frontLayerZ(size, TRIM_DEPTH, FRONT_TRIM_OFFSET + 0.012)
     });
@@ -1120,53 +1233,59 @@ function addStorefront(
       });
     }
   } else if (style === "market" || style === "apartment") {
-    addChildBox(mesh, size.x * 0.78, 0.08, DECAL_DEPTH, signMaterial, {
-      y: -size.y * 0.26,
+    addChildBox(mesh, size.x * storefront.signWidth, 0.08, DECAL_DEPTH, signMaterial, {
+      y: size.y * storefront.signY,
       z: frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET)
     });
-    addChildBox(mesh, size.x * 0.62, 0.19, TRIM_DEPTH, trimMaterial, {
+    addChildBox(mesh, size.x * Math.max(storefront.glassWidth, storefront.doorWidth + 0.2), size.y * Math.max(0.18, storefront.glassHeight), TRIM_DEPTH, trimMaterial, {
       y: -size.y * 0.06,
       z: frontLayerZ(size, TRIM_DEPTH, FRONT_TRIM_OFFSET + 0.014)
     });
-    addChildBox(mesh, size.x * 0.44, 0.15, GLASS_DEPTH, material("shop_glass"), {
+    addChildBox(mesh, size.x * storefront.glassWidth * 0.74, size.y * storefront.glassHeight, GLASS_DEPTH, material("shop_glass"), {
       y: -size.y * 0.055,
       z: frontLayerZ(size, GLASS_DEPTH, FRONT_GLASS_OFFSET + 0.006)
     });
-    addChildBox(mesh, 0.055, 0.18, DECAL_DEPTH, trimMaterial, {
+    addChildBox(mesh, Math.max(0.05, size.x * storefront.doorWidth * 0.26), size.y * storefront.doorHeight, DECAL_DEPTH, trimMaterial, {
       x: size.x * 0.18,
       y: -size.y * 0.065,
       z: frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET + 0.006)
     });
-    addChildBox(mesh, size.x * 0.72, 0.045, 0.1, material("awning_red"), {
+    addChildBox(mesh, size.x * storefront.canopyWidth, 0.045, Math.max(0.04, storefront.canopyDepth), material("awning_red"), {
       y: -size.y * 0.17,
-      z: frontLayerZ(size, 0.1, FRONT_DECAL_OFFSET + 0.03),
+      z: frontLayerZ(size, Math.max(0.04, storefront.canopyDepth), FRONT_DECAL_OFFSET + 0.03),
       rotationX: Math.PI * 0.04
     });
   } else if (style === "civic" || style === "utility") {
-    addChildBox(mesh, size.x * 0.64, 0.07, DECAL_DEPTH, signMaterial, {
-      y: -size.y * 0.26,
+    addChildBox(mesh, size.x * storefront.signWidth, 0.07, DECAL_DEPTH, signMaterial, {
+      y: size.y * storefront.signY,
       z: frontLayerZ(size, DECAL_DEPTH, FRONT_DECAL_OFFSET)
     });
-    addChildBox(mesh, size.x * 0.28, size.y * 0.22, TRIM_DEPTH, trimMaterial, {
+    addChildBox(mesh, size.x * storefront.doorWidth, size.y * storefront.doorHeight, TRIM_DEPTH, trimMaterial, {
       y: -size.y * 0.08,
       z: frontLayerZ(size, TRIM_DEPTH, FRONT_TRIM_OFFSET + 0.012)
     });
     addChildBox(mesh, 0.035, size.y * 0.82, 0.035, material("service_pipe"), {
-      x: size.x * 0.38,
+      x: size.x * storefront.pipeX,
       y: 0,
       z: frontLayerZ(size, 0.035, FRONT_DECAL_OFFSET + 0.012)
     });
   }
 }
 
-function addRoofDetail(mesh: THREE.Mesh, options: BuildingCellVisualOptions, roofMaterial: THREE.Material): void {
+function addRoofDetail(
+  mesh: THREE.Mesh,
+  options: BuildingCellVisualOptions,
+  roofMaterial: THREE.Material,
+  profile: BuildingKitProfile
+): void {
   const size = options.size;
-  addChildBox(mesh, size.x * 1.08, 0.045, size.z * 1.08, roofMaterial, { y: size.y * 0.5 + 0.034 });
-  addChildBox(mesh, size.x * 1.12, 0.055, 0.045, material("parapet_dark"), { y: size.y * 0.5 + 0.096, z: size.z * 0.5 });
-  addChildBox(mesh, size.x * 1.12, 0.055, 0.045, material("parapet_dark"), { y: size.y * 0.5 + 0.096, z: -size.z * 0.5 });
-  addChildBox(mesh, 0.045, 0.055, size.z * 1.12, material("parapet_dark"), { x: -size.x * 0.5, y: size.y * 0.5 + 0.096 });
-  addChildBox(mesh, 0.045, 0.055, size.z * 1.12, material("parapet_dark"), { x: size.x * 0.5, y: size.y * 0.5 + 0.096 });
-  addChildBox(mesh, size.x * 0.42, 0.055, size.z * 0.18, material("roof_unit"), {
+  const roof = profile.roof;
+  addChildBox(mesh, size.x * roof.capWidth, 0.045, size.z * roof.capDepth, roofMaterial, { y: size.y * 0.5 + 0.034 });
+  addChildBox(mesh, size.x * (roof.capWidth + 0.04), roof.parapetHeight, 0.045, material("parapet_dark"), { y: size.y * 0.5 + 0.096, z: size.z * 0.5 });
+  addChildBox(mesh, size.x * (roof.capWidth + 0.04), roof.parapetHeight, 0.045, material("parapet_dark"), { y: size.y * 0.5 + 0.096, z: -size.z * 0.5 });
+  addChildBox(mesh, 0.045, roof.parapetHeight, size.z * (roof.capDepth + 0.04), material("parapet_dark"), { x: -size.x * 0.5, y: size.y * 0.5 + 0.096 });
+  addChildBox(mesh, 0.045, roof.parapetHeight, size.z * (roof.capDepth + 0.04), material("parapet_dark"), { x: size.x * 0.5, y: size.y * 0.5 + 0.096 });
+  addChildBox(mesh, size.x * roof.mechanicalWidth, 0.055, size.z * roof.mechanicalDepth, material("roof_unit"), {
     x: -size.x * 0.16,
     y: size.y * 0.5 + 0.088,
     z: size.z * 0.12
@@ -1182,7 +1301,7 @@ function addRoofDetail(mesh: THREE.Mesh, options: BuildingCellVisualOptions, roo
     z: size.z * 0.2
   });
   if (options.style === "glassTower") {
-    addChildBox(mesh, size.x * 0.46, 0.12, size.z * 0.46, material("neon_cyan"), {
+    addChildBox(mesh, size.x * roof.screenWidth, 0.12, size.z * roof.screenWidth, material("neon_cyan"), {
       y: size.y * 0.5 + 0.16
     });
     addChildCylinder(mesh, 0.012, 0.018, 0.42, material("roof_rail"), {
@@ -1196,7 +1315,7 @@ function addRoofDetail(mesh: THREE.Mesh, options: BuildingCellVisualOptions, roo
     });
     if (options.style === "warehouse") {
       for (const z of [-0.22, 0.22]) {
-        addChildBox(mesh, size.x * 0.48, 0.04, 0.055, material("roof_unit"), {
+        addChildBox(mesh, size.x * roof.screenWidth, 0.04, 0.055, material("roof_unit"), {
           y: size.y * 0.5 + 0.14,
           z: size.z * z
         });
@@ -1691,24 +1810,24 @@ function createMaterial(key: string): THREE.Material {
   switch (key) {
     case "cool_window":
       return new THREE.MeshStandardMaterial({
-        color: 0x9fd4db,
+        color: 0x82b8c2,
         transparent: true,
-        opacity: 0.56,
-        roughness: 0.24,
+        opacity: 0.58,
+        roughness: 0.34,
         metalness: 0.18,
-        emissive: 0x123642,
-        emissiveIntensity: 0.08,
+        emissive: 0x0b252e,
+        emissiveIntensity: 0.06,
         depthWrite: false
       });
     case "warm_window":
       return new THREE.MeshStandardMaterial({
-        color: 0xdcc47e,
+        color: 0xc9a766,
         transparent: true,
-        opacity: 0.5,
-        roughness: 0.34,
+        opacity: 0.52,
+        roughness: 0.4,
         metalness: 0.08,
-        emissive: 0x3d2705,
-        emissiveIntensity: 0.06,
+        emissive: 0x2a1903,
+        emissiveIntensity: 0.05,
         depthWrite: false
       });
     case "shop_glass":
@@ -1722,7 +1841,7 @@ function createMaterial(key: string): THREE.Material {
         envMapIntensity: 1.18
       });
     case "hazard_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x7b3023, roughness: 0.72, metalness: 0.04, map: materialAtlasTile(4) });
+      return new THREE.MeshStandardMaterial({ color: 0x612c25, roughness: 0.84, metalness: 0.04, map: materialAtlasTile(4) });
     case "hazard_trim":
       return new THREE.MeshStandardMaterial({ color: 0xff7a35, roughness: 0.44, metalness: 0.08, emissive: 0x4a1508, emissiveIntensity: 0.45 });
     case "hazard_sign":
@@ -1756,32 +1875,32 @@ function createMaterial(key: string): THREE.Material {
     case "roof_unit":
       return new THREE.MeshStandardMaterial({ color: 0x313a42, roughness: 0.48, metalness: 0.55, map: materialAtlasTile(10) });
     case "market_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x635246, roughness: 0.78, metalness: 0.02, map: materialAtlasTile(13) });
+      return new THREE.MeshStandardMaterial({ color: 0x574b42, roughness: 0.86, metalness: 0.02, map: materialAtlasTile(13) });
     case "market_trim":
       return new THREE.MeshStandardMaterial({ color: 0xf0c16a, roughness: 0.5, metalness: 0.06 });
     case "market_sign":
       return new THREE.MeshBasicMaterial({ color: 0xffe08c });
     case "glass_facade":
       return new THREE.MeshPhysicalMaterial({
-        color: 0x4f8792,
+        color: 0x426f78,
         transparent: true,
-        opacity: 0.42,
-        roughness: 0.18,
+        opacity: 0.46,
+        roughness: 0.26,
         metalness: 0.02,
         depthWrite: false,
         map: materialAtlasTile(8),
-        envMapIntensity: 1.22
+        envMapIntensity: 0.92
       });
     case "industrial_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x515d63, roughness: 0.76, metalness: 0.08, map: materialAtlasTile(12) });
+      return new THREE.MeshStandardMaterial({ color: 0x444e53, roughness: 0.86, metalness: 0.1, map: materialAtlasTile(12) });
     case "civic_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x77736a, roughness: 0.86, metalness: 0.02, map: materialAtlasTile(15) });
+      return new THREE.MeshStandardMaterial({ color: 0x696760, roughness: 0.92, metalness: 0.02, map: materialAtlasTile(15) });
     case "utility_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x4a5962, roughness: 0.72, metalness: 0.16, map: materialAtlasTile(2) });
+      return new THREE.MeshStandardMaterial({ color: 0x3f4b52, roughness: 0.82, metalness: 0.2, map: materialAtlasTile(2) });
     case "apartment_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x6c5e55, roughness: 0.8, metalness: 0.02, map: materialAtlasTile(13) });
+      return new THREE.MeshStandardMaterial({ color: 0x5c514a, roughness: 0.88, metalness: 0.02, map: materialAtlasTile(13) });
     case "warehouse_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x596269, roughness: 0.78, metalness: 0.06, map: materialAtlasTile(3) });
+      return new THREE.MeshStandardMaterial({ color: 0x4d565c, roughness: 0.86, metalness: 0.08, map: materialAtlasTile(3) });
     case "cool_trim":
       return new THREE.MeshStandardMaterial({ color: 0x7ec7d2, roughness: 0.46, metalness: 0.22 });
     case "cool_sign":
@@ -1811,7 +1930,7 @@ function createMaterial(key: string): THREE.Material {
     case "omnitech_logo_text":
       return new THREE.MeshBasicMaterial({ color: 0xd8c6ff, transparent: true, opacity: 0.84 });
     case "neutral_facade":
-      return new THREE.MeshStandardMaterial({ color: 0x62686d, roughness: 0.82, metalness: 0.02, map: materialAtlasTile(3) });
+      return new THREE.MeshStandardMaterial({ color: 0x555d62, roughness: 0.9, metalness: 0.02, map: materialAtlasTile(3) });
     case "dark_trim":
       return new THREE.MeshStandardMaterial({ color: 0x262f36, roughness: 0.58, metalness: 0.16, map: materialAtlasTile(1) });
     case "shadow_reveal":
@@ -1819,9 +1938,9 @@ function createMaterial(key: string): THREE.Material {
     case "mechanical_screen":
       return new THREE.MeshStandardMaterial({ color: 0x29323a, roughness: 0.62, metalness: 0.36, map: materialAtlasTile(10) });
     case "dark_roof":
-      return new THREE.MeshStandardMaterial({ color: 0x20272d, roughness: 0.84, metalness: 0.05, map: materialAtlasTile(12) });
+      return new THREE.MeshStandardMaterial({ color: 0x171e24, roughness: 0.9, metalness: 0.06, map: materialAtlasTile(12) });
     case "warm_roof":
-      return new THREE.MeshStandardMaterial({ color: 0x7f5a3e, roughness: 0.8, metalness: 0.02, map: materialAtlasTile(13) });
+      return new THREE.MeshStandardMaterial({ color: 0x6b4c36, roughness: 0.88, metalness: 0.02, map: materialAtlasTile(13) });
     case "glass_shard":
       return new THREE.MeshPhysicalMaterial({ color: 0xc7fbff, transparent: true, opacity: 0.58, roughness: 0.12, metalness: 0, depthWrite: false, envMapIntensity: 1.16 });
     case "scraped_metal":

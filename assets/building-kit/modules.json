@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "source": {
+    "name": "Downtown Mayhem modular facade kit",
+    "license": "project-local generated geometry",
+    "notes": "Cells are destructible physics blocks. These modules describe facade pieces, not full buildings."
+  },
+  "profiles": {
+    "industrial": {
+      "facade": { "frontWidth": 0.98, "frontHeight": 0.94, "backWidth": 0.94, "backHeight": 0.84, "sideHeight": 0.8, "sideDepth": 0.86 },
+      "windows": { "rows": 2, "columns": 2, "widthScale": 0.68, "heightScale": 0.56, "usableWidth": 0.7, "usableHeight": 0.46, "xSpread": 1.18, "ySpread": 1.18, "yOffset": 0.1, "glass": "warm_window", "frame": "full" },
+      "massing": { "baseWidth": 1.02, "baseHeight": 0.16, "crownWidth": 0.98, "crownHeight": 0.08, "sideReturn": 0.82 },
+      "frontRibs": [-0.42, -0.18, 0.18, 0.42],
+      "horizontalBands": [-0.32, 0.32],
+      "sideRibs": [-0.28, 0.28],
+      "weathering": { "grime": [-0.34, -0.08, 0.31], "soot": 0.62, "litWindows": 0.18, "brokenWindows": 0.2 },
+      "silhouette": { "crownInset": 0.08, "setbackDepth": 0.16, "rooftopScatter": 0.72, "sideBladeHeight": 0.46, "antennaHeight": 0.24 },
+      "storefront": { "signWidth": 0.74, "signY": -0.25, "doorWidth": 0.42, "doorHeight": 0.26, "glassWidth": 0.34, "glassHeight": 0.18, "canopyWidth": 0.62, "canopyDepth": 0.08, "pipeX": -0.38 },
+      "roof": { "capWidth": 1.1, "capDepth": 1.1, "parapetHeight": 0.07, "mechanicalWidth": 0.46, "mechanicalDepth": 0.2, "screenWidth": 0.58 }
+    },
+    "glassTower": {
+      "facade": { "frontWidth": 0.98, "frontHeight": 0.96, "backWidth": 0.94, "backHeight": 0.9, "sideHeight": 0.88, "sideDepth": 0.9 },
+      "windows": { "rows": 2, "columns": 3, "widthScale": 0.86, "heightScale": 0.88, "usableWidth": 0.82, "usableHeight": 0.62, "xSpread": 1.08, "ySpread": 1.08, "yOffset": 0.08, "glass": "cool_window", "frame": "lean" },
+      "massing": { "baseWidth": 0.96, "baseHeight": 0.1, "crownWidth": 0.9, "crownHeight": 0.12, "sideReturn": 0.78 },
+      "frontRibs": [-0.34, 0, 0.34],
+      "horizontalBands": [-0.36, 0, 0.36],
+      "sideRibs": [-0.32, 0.32],
+      "weathering": { "grime": [-0.28, 0.18], "soot": 0.28, "litWindows": 0.34, "brokenWindows": 0.26 },
+      "silhouette": { "crownInset": 0.16, "setbackDepth": 0.2, "rooftopScatter": 0.58, "sideBladeHeight": 0.64, "antennaHeight": 0.52 },
+      "storefront": { "signWidth": 0.62, "signY": -0.26, "doorWidth": 0.24, "doorHeight": 0.24, "glassWidth": 0.58, "glassHeight": 0.2, "canopyWidth": 0.5, "canopyDepth": 0.04, "pipeX": 0.38 },
+      "roof": { "capWidth": 1.06, "capDepth": 1.06, "parapetHeight": 0.06, "mechanicalWidth": 0.42, "mechanicalDepth": 0.18, "screenWidth": 0.46 }
+    },
+    "civic": {
+      "facade": { "frontWidth": 0.98, "frontHeight": 0.94, "backWidth": 0.92, "backHeight": 0.86, "sideHeight": 0.82, "sideDepth": 0.84 },
+      "windows": { "rows": 2, "columns": 2, "widthScale": 0.66, "heightScale": 0.62, "usableWidth": 0.66, "usableHeight": 0.5, "xSpread": 1.22, "ySpread": 1.18, "yOffset": 0.1, "glass": "cool_window", "frame": "full" },
+      "massing": { "baseWidth": 1.02, "baseHeight": 0.16, "crownWidth": 1, "crownHeight": 0.1, "sideReturn": 0.82 },
+      "frontRibs": [-0.36, -0.12, 0.12, 0.36],
+      "horizontalBands": [-0.34, 0.34],
+      "sideRibs": [-0.3, 0.3],
+      "weathering": { "grime": [-0.3, 0.02, 0.32], "soot": 0.38, "litWindows": 0.16, "brokenWindows": 0.16 },
+      "silhouette": { "crownInset": 0.06, "setbackDepth": 0.12, "rooftopScatter": 0.5, "sideBladeHeight": 0.38, "antennaHeight": 0.32 },
+      "storefront": { "signWidth": 0.64, "signY": -0.26, "doorWidth": 0.28, "doorHeight": 0.22, "glassWidth": 0.46, "glassHeight": 0.16, "canopyWidth": 0.5, "canopyDepth": 0.05, "pipeX": 0.38 },
+      "roof": { "capWidth": 1.08, "capDepth": 1.08, "parapetHeight": 0.08, "mechanicalWidth": 0.36, "mechanicalDepth": 0.24, "screenWidth": 0.64 }
+    },
+    "utility": {
+      "facade": { "frontWidth": 0.98, "frontHeight": 0.92, "backWidth": 0.92, "backHeight": 0.82, "sideHeight": 0.8, "sideDepth": 0.84 },
+      "windows": { "rows": 1, "columns": 2, "widthScale": 0.66, "heightScale": 0.58, "usableWidth": 0.64, "usableHeight": 0.34, "xSpread": 1.18, "ySpread": 1, "yOffset": 0.08, "glass": "cool_window", "frame": "standard" },
+      "massing": { "baseWidth": 1.02, "baseHeight": 0.14, "crownWidth": 0.96, "crownHeight": 0.08, "sideReturn": 0.82 },
+      "frontRibs": [-0.4, 0.4],
+      "horizontalBands": [-0.24, 0.2],
+      "sideRibs": [-0.26, 0.26],
+      "weathering": { "grime": [-0.38, 0.26], "soot": 0.52, "litWindows": 0.12, "brokenWindows": 0.18 },
+      "silhouette": { "crownInset": 0.1, "setbackDepth": 0.14, "rooftopScatter": 0.7, "sideBladeHeight": 0.5, "antennaHeight": 0.28 },
+      "storefront": { "signWidth": 0.64, "signY": -0.26, "doorWidth": 0.3, "doorHeight": 0.24, "glassWidth": 0.34, "glassHeight": 0.16, "canopyWidth": 0.44, "canopyDepth": 0.05, "pipeX": 0.38 },
+      "roof": { "capWidth": 1.08, "capDepth": 1.08, "parapetHeight": 0.06, "mechanicalWidth": 0.66, "mechanicalDepth": 0.16, "screenWidth": 0.5 }
+    },
+    "apartment": {
+      "facade": { "frontWidth": 0.96, "frontHeight": 0.92, "backWidth": 0.92, "backHeight": 0.84, "sideHeight": 0.78, "sideDepth": 0.82 },
+      "windows": { "rows": 2, "columns": 2, "widthScale": 0.68, "heightScale": 0.64, "usableWidth": 0.68, "usableHeight": 0.5, "xSpread": 1.2, "ySpread": 1.2, "yOffset": 0.1, "glass": "warm_window", "frame": "standard" },
+      "massing": { "baseWidth": 1, "baseHeight": 0.13, "crownWidth": 0.96, "crownHeight": 0.08, "sideReturn": 0.8 },
+      "frontRibs": [-0.4, 0.4],
+      "horizontalBands": [-0.36, 0, 0.36],
+      "sideRibs": [-0.28, 0.28],
+      "weathering": { "grime": [-0.36, -0.04, 0.34], "soot": 0.44, "litWindows": 0.24, "brokenWindows": 0.14 },
+      "silhouette": { "crownInset": 0.08, "setbackDepth": 0.12, "rooftopScatter": 0.62, "sideBladeHeight": 0.36, "antennaHeight": 0.2 },
+      "storefront": { "signWidth": 0.78, "signY": -0.26, "doorWidth": 0.22, "doorHeight": 0.24, "glassWidth": 0.58, "glassHeight": 0.18, "canopyWidth": 0.74, "canopyDepth": 0.1, "pipeX": -0.36 },
+      "roof": { "capWidth": 1.06, "capDepth": 1.06, "parapetHeight": 0.06, "mechanicalWidth": 0.4, "mechanicalDepth": 0.18, "screenWidth": 0.42 }
+    },
+    "warehouse": {
+      "facade": { "frontWidth": 0.98, "frontHeight": 0.9, "backWidth": 0.94, "backHeight": 0.8, "sideHeight": 0.76, "sideDepth": 0.86 },
+      "windows": { "rows": 1, "columns": 2, "widthScale": 0.7, "heightScale": 0.56, "usableWidth": 0.68, "usableHeight": 0.34, "xSpread": 1.22, "ySpread": 1, "yOffset": 0.08, "glass": "warm_window", "frame": "standard" },
+      "massing": { "baseWidth": 1.04, "baseHeight": 0.15, "crownWidth": 1.02, "crownHeight": 0.07, "sideReturn": 0.86 },
+      "frontRibs": [-0.42, 0, 0.42],
+      "horizontalBands": [-0.26, -0.08, 0.1],
+      "sideRibs": [-0.32, 0.32],
+      "weathering": { "grime": [-0.42, -0.12, 0.28], "soot": 0.68, "litWindows": 0.1, "brokenWindows": 0.18 },
+      "silhouette": { "crownInset": 0.04, "setbackDepth": 0.1, "rooftopScatter": 0.78, "sideBladeHeight": 0.44, "antennaHeight": 0.18 },
+      "storefront": { "signWidth": 0.66, "signY": -0.28, "doorWidth": 0.54, "doorHeight": 0.3, "glassWidth": 0.28, "glassHeight": 0.12, "canopyWidth": 0.58, "canopyDepth": 0.04, "pipeX": 0.36 },
+      "roof": { "capWidth": 1.1, "capDepth": 1.08, "parapetHeight": 0.06, "mechanicalWidth": 0.52, "mechanicalDepth": 0.14, "screenWidth": 0.58 }
+    },
+    "market": {
+      "facade": { "frontWidth": 0.96, "frontHeight": 0.9, "backWidth": 0.92, "backHeight": 0.82, "sideHeight": 0.78, "sideDepth": 0.82 },
+      "windows": { "rows": 2, "columns": 2, "widthScale": 0.7, "heightScale": 0.58, "usableWidth": 0.68, "usableHeight": 0.48, "xSpread": 1.18, "ySpread": 1.18, "yOffset": 0.1, "glass": "shop_glass", "frame": "standard" },
+      "massing": { "baseWidth": 1.02, "baseHeight": 0.12, "crownWidth": 0.96, "crownHeight": 0.07, "sideReturn": 0.78 },
+      "frontRibs": [-0.4, 0.4],
+      "horizontalBands": [-0.34, 0.34],
+      "sideRibs": [-0.28, 0.28],
+      "weathering": { "grime": [-0.32, 0.2], "soot": 0.34, "litWindows": 0.3, "brokenWindows": 0.12 },
+      "silhouette": { "crownInset": 0.06, "setbackDepth": 0.1, "rooftopScatter": 0.5, "sideBladeHeight": 0.3, "antennaHeight": 0.16 },
+      "storefront": { "signWidth": 0.8, "signY": -0.26, "doorWidth": 0.2, "doorHeight": 0.22, "glassWidth": 0.6, "glassHeight": 0.2, "canopyWidth": 0.76, "canopyDepth": 0.11, "pipeX": -0.34 },
+      "roof": { "capWidth": 1.06, "capDepth": 1.06, "parapetHeight": 0.05, "mechanicalWidth": 0.34, "mechanicalDepth": 0.18, "screenWidth": 0.36 }
+    }
+  }
+}

@@ -39,8 +39,8 @@ export class MaterialCatalog {
         id: "wood",
         name: "Wood",
         key: "1",
-        color: new THREE.Color(0xb86f34),
-        dustColor: new THREE.Color(0xc08a4a),
+        color: new THREE.Color(0x8f5731),
+        dustColor: new THREE.Color(0xb07b48),
         density: 0.72,
         massFactor: 1.15,
         friction: 0.72,
@@ -55,8 +55,8 @@ export class MaterialCatalog {
         id: "glass",
         name: "Glass",
         key: "2",
-        color: new THREE.Color(0x83f4ff),
-        dustColor: new THREE.Color(0xb6fbff),
+        color: new THREE.Color(0x75cfdc),
+        dustColor: new THREE.Color(0xa7edf2),
         density: 0.38,
         massFactor: 0.62,
         friction: 0.18,
@@ -71,8 +71,8 @@ export class MaterialCatalog {
         id: "concrete",
         name: "Concrete",
         key: "3",
-        color: new THREE.Color(0x858981),
-        dustColor: new THREE.Color(0x9c9b91),
+        color: new THREE.Color(0x6f736d),
+        dustColor: new THREE.Color(0x928f84),
         density: 2.2,
         massFactor: 2.75,
         friction: 0.92,
@@ -87,8 +87,8 @@ export class MaterialCatalog {
         id: "metal",
         name: "Metal",
         key: "4",
-        color: new THREE.Color(0x3a4652),
-        dustColor: new THREE.Color(0x8ca3b5),
+        color: new THREE.Color(0x303b45),
+        dustColor: new THREE.Color(0x7f95a5),
         density: 4.2,
         massFactor: 4.2,
         friction: 0.54,
@@ -119,8 +119,8 @@ export class MaterialCatalog {
         id: "foam",
         name: "Foam / Plastic",
         key: "6",
-        color: new THREE.Color(0xf5d56f),
-        dustColor: new THREE.Color(0xffe8a8),
+        color: new THREE.Color(0xd7bd61),
+        dustColor: new THREE.Color(0xe7d08b),
         density: 0.18,
         massFactor: 0.35,
         friction: 0.24,
@@ -165,16 +165,16 @@ export class MaterialCatalog {
 
     if (id === "glass") {
       return new THREE.MeshPhysicalMaterial({
-        color: 0x7fe8f4,
+        color: 0x76c9d4,
         transparent: true,
-        opacity: 0.5,
-        roughness: 0.14,
+        opacity: 0.46,
+        roughness: 0.2,
         metalness: 0,
         map: materialAtlasTile(8),
         transmission: 0.22,
         thickness: 0.42,
-        clearcoat: 0.75,
-        clearcoatRoughness: 0.18,
+        clearcoat: 0.62,
+        clearcoatRoughness: 0.24,
         depthWrite: false,
         envMapIntensity: 1.05
       });
@@ -182,9 +182,9 @@ export class MaterialCatalog {
 
     if (id === "metal") {
       return new THREE.MeshStandardMaterial({
-        color: 0x465765,
-        roughness: 0.31,
-        metalness: 0.9,
+        color: 0x34444f,
+        roughness: 0.42,
+        metalness: 0.78,
         map: materialAtlasTile(0),
         envMapIntensity: 0.95
       });
@@ -201,8 +201,8 @@ export class MaterialCatalog {
 
     if (id === "foam") {
       return new THREE.MeshStandardMaterial({
-        color: 0xf4df82,
-        roughness: 0.74,
+        color: 0xd9c06a,
+        roughness: 0.8,
         metalness: 0.0,
         map: materialAtlasTile(7)
       });
@@ -210,15 +210,15 @@ export class MaterialCatalog {
 
     if (id === "wood") {
       return new THREE.MeshStandardMaterial({
-        color: 0xa96431,
-        roughness: 0.7,
+        color: 0x87512d,
+        roughness: 0.76,
         metalness: 0,
         map: materialAtlasTile(14)
       });
     }
 
     return new THREE.MeshStandardMaterial({
-      color: 0x777b76,
+      color: 0x6b6f6a,
       roughness: 0.96,
       metalness: 0,
       map: materialAtlasTile(3)

@@ -595,10 +595,10 @@ function createDaySkyTexture(): THREE.CanvasTexture {
   }
 
   const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, "#1f6fbf");
-  gradient.addColorStop(0.36, "#58b0e7");
-  gradient.addColorStop(0.72, "#accfda");
-  gradient.addColorStop(1, "#d7b46f");
+  gradient.addColorStop(0, "#2d6f9d");
+  gradient.addColorStop(0.34, "#6aa9c4");
+  gradient.addColorStop(0.72, "#b7c3b6");
+  gradient.addColorStop(1, "#d0a15b");
   context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -610,8 +610,8 @@ function createDaySkyTexture(): THREE.CanvasTexture {
     canvas.height * 1.08,
     canvas.width * 0.64
   );
-  horizonGlow.addColorStop(0, "rgba(244, 217, 147, 0.28)");
-  horizonGlow.addColorStop(0.46, "rgba(217, 174, 96, 0.12)");
+  horizonGlow.addColorStop(0, "rgba(230, 198, 130, 0.34)");
+  horizonGlow.addColorStop(0.46, "rgba(190, 137, 72, 0.18)");
   horizonGlow.addColorStop(1, "rgba(118, 190, 255, 0)");
   context.fillStyle = horizonGlow;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -624,8 +624,8 @@ function createDaySkyTexture(): THREE.CanvasTexture {
     canvas.height * 0.36,
     canvas.width * 0.38
   );
-  sunWash.addColorStop(0, "rgba(255, 235, 174, 0.38)");
-  sunWash.addColorStop(0.34, "rgba(232, 170, 77, 0.14)");
+  sunWash.addColorStop(0, "rgba(255, 220, 142, 0.44)");
+  sunWash.addColorStop(0.34, "rgba(218, 139, 58, 0.2)");
   sunWash.addColorStop(1, "rgba(236, 205, 137, 0)");
   context.fillStyle = sunWash;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -652,9 +652,9 @@ function createSkyReflectionTexture(): THREE.CanvasTexture {
   }
 
   const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, "#4fa4dc");
-  gradient.addColorStop(0.44, "#a7d2df");
-  gradient.addColorStop(0.58, "#d8b978");
+  gradient.addColorStop(0, "#448caf");
+  gradient.addColorStop(0.44, "#9ebfc4");
+  gradient.addColorStop(0.58, "#cfa064");
   gradient.addColorStop(1, "#141f24");
   context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -6546,50 +6546,50 @@ function graphicsLightingProfile(quality: GraphicsQuality): GraphicsLightingProf
   switch (quality) {
     case "performance":
       return {
-        background: 0x9ed4f0,
-        fog: 0xd7e2df,
-        fogNear: 68,
-        fogFar: 162,
-        exposure: 1.04,
-        ambientSky: 0xb8e4f2,
-        ambientGround: 0xbc935b,
-        ambientIntensity: 0.74,
-        sunColor: 0xffd58a,
-        sunIntensity: 2.85,
-        skyFillColor: 0x82c6e8,
-        skyFillIntensity: 0.24,
+        background: 0x8fc7dc,
+        fog: 0xcfd2c5,
+        fogNear: 58,
+        fogFar: 138,
+        exposure: 1.02,
+        ambientSky: 0x9fd1dc,
+        ambientGround: 0xa47b4a,
+        ambientIntensity: 0.68,
+        sunColor: 0xffc474,
+        sunIntensity: 3.02,
+        skyFillColor: 0x6faec6,
+        skyFillIntensity: 0.2,
         shadowMapSize: 1536
       };
     case "balanced":
       return {
-        background: 0x8fc8e9,
-        fog: 0xd2dbd5,
-        fogNear: 62,
-        fogFar: 154,
-        exposure: 1.06,
-        ambientSky: 0xa9dced,
-        ambientGround: 0xb4864c,
-        ambientIntensity: 0.72,
-        sunColor: 0xffcc76,
-        sunIntensity: 3.02,
-        skyFillColor: 0x74bade,
-        skyFillIntensity: 0.26,
+        background: 0x81bed8,
+        fog: 0xcac8b7,
+        fogNear: 52,
+        fogFar: 128,
+        exposure: 1.04,
+        ambientSky: 0x93c8d8,
+        ambientGround: 0x9e7242,
+        ambientIntensity: 0.66,
+        sunColor: 0xffb85f,
+        sunIntensity: 3.18,
+        skyFillColor: 0x64a8c2,
+        skyFillIntensity: 0.21,
         shadowMapSize: 1536
       };
     case "cinematic":
       return {
-        background: 0x78bae3,
-        fog: 0xd4d2bd,
-        fogNear: 58,
-        fogFar: 146,
-        exposure: 1.08,
-        ambientSky: 0xa5d9ea,
-        ambientGround: 0xb07e43,
-        ambientIntensity: 0.68,
-        sunColor: 0xffc46a,
-        sunIntensity: 3.12,
-        skyFillColor: 0x6fb8dc,
-        skyFillIntensity: 0.24,
+        background: 0x72aec8,
+        fog: 0xc7bca3,
+        fogNear: 46,
+        fogFar: 118,
+        exposure: 1.06,
+        ambientSky: 0x8ec1d0,
+        ambientGround: 0x9a6a3a,
+        ambientIntensity: 0.62,
+        sunColor: 0xffad55,
+        sunIntensity: 3.34,
+        skyFillColor: 0x5d9fbd,
+        skyFillIntensity: 0.18,
         shadowMapSize: 2048
       };
   }
@@ -6604,13 +6604,13 @@ function canvasGradeProfile(quality: GraphicsQuality): CanvasGradeProfile {
       };
     case "balanced":
       return {
-        filter: "contrast(1.035) saturate(1.035)",
-        boxShadow: "inset 0 0 54px rgba(5, 13, 18, 0.12)"
+        filter: "contrast(1.06) saturate(0.96) sepia(0.05)",
+        boxShadow: "inset 0 0 62px rgba(5, 13, 18, 0.16)"
       };
     case "cinematic":
       return {
-        filter: "contrast(1.065) saturate(1.055)",
-        boxShadow: "inset 0 0 86px rgba(5, 13, 18, 0.18)"
+        filter: "contrast(1.095) saturate(0.94) sepia(0.08)",
+        boxShadow: "inset 0 0 98px rgba(5, 13, 18, 0.22)"
       };
   }
 }
