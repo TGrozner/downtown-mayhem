@@ -5,6 +5,9 @@ import type { ProjectileDefinition } from "./projectile";
 
 const CHAIN_BASE_POINTS_CAP = 900;
 const CHAIN_AWARDED_POINTS_CAP = 1_200;
+const DEFAULT_GOLDEN_EGG_CHARGE_START = 40_000;
+const DEFAULT_GOLDEN_EGG_FULL_CHARGE = 240_000;
+const GOLDEN_EGG_MAX_MULTIPLIER = 8;
 
 export type ScoreEventKind = "target" | "chain" | "chaos";
 
@@ -21,11 +24,19 @@ export interface ScoreBreakdown {
   collateralChaos: number;
   chainReactionBonus: number;
   remainingDebrisMotion: number;
+  goldenEggDestroyed: boolean;
+  goldenEggMultiplier: number;
+  goldenEggBonus: number;
   mayhemRating: string;
   totalScore: number;
   shotName: string;
   chainReactionCount: number;
   maxChainCombo: number;
+}
+
+export interface ScoreFinalizeOptions {
+  goldenEggChargeStart?: number;
+  goldenEggFullCharge?: number;
 }
 
 export class ShotScoreTracker {
@@ -35,6 +46,7 @@ export class ShotScoreTracker {
   private currentProjectile: ProjectileDefinition | null = null;
   private chainReactionCount = 0;
   private maxChainCombo = 0;
+  private goldenEggDestroyed = false;
   private readonly scoredObjects = new Map<number, number>();
 
   beginShot(projectile: ProjectileDefinition): void {
@@ -43,12 +55,16 @@ export class ShotScoreTracker {
     this.chainReactionBonus = 0;
     this.chainReactionCount = 0;
     this.maxChainCombo = 0;
+    this.goldenEggDestroyed = false;
     this.currentProjectile = projectile;
     this.scoredObjects.clear();
   }
 
   addExplosion(result: ExplosionResult): ScoreEvent[] {
     const events: ScoreEvent[] = [];
+    if (result.affectedObjects.some((object) => isGoldenEggObject(object) && object.fractured)) {
+      this.goldenEggDestroyed = true;
+    }
     const target = this.dedupPositive(result);
     this.targetDamage += target.points;
     this.collateralChaos += result.materialChaos;
@@ -89,7 +105,7 @@ export class ShotScoreTracker {
     ];
   }
 
-  finalize(physics: PhysicsWorld): ScoreBreakdown {
+  finalize(physics: PhysicsWorld, options: ScoreFinalizeOptions = {}): ScoreBreakdown {
     const projectile = this.currentProjectile;
     const remainingDebrisMotion = Math.round(
       physics
@@ -107,12 +123,19 @@ export class ShotScoreTracker {
       this.collateralChaos +
       this.chainReactionBonus +
       remainingDebrisMotion;
-    const totalScore = Math.max(0, Math.round(raw * modifier));
+    const goldenEggMultiplier = this.goldenEggDestroyed
+      ? goldenEggMultiplierForRawScore(raw, options)
+      : 1;
+    const modifiedRaw = raw * modifier;
+    const totalScore = Math.max(0, Math.round(modifiedRaw * goldenEggMultiplier));
     return {
       targetDamage: Math.round(this.targetDamage * modifier),
       collateralChaos: Math.round(this.collateralChaos * modifier),
       chainReactionBonus: Math.round(this.chainReactionBonus * modifier),
       remainingDebrisMotion: Math.round(remainingDebrisMotion * modifier),
+      goldenEggDestroyed: this.goldenEggDestroyed,
+      goldenEggMultiplier,
+      goldenEggBonus: Math.max(0, Math.round(modifiedRaw * (goldenEggMultiplier - 1))),
       mayhemRating: mayhemRating(totalScore),
       totalScore,
       shotName: projectile?.name ?? "No Shot",
@@ -125,6 +148,9 @@ export class ShotScoreTracker {
     let points = 0;
     const events: ScoreEvent[] = [];
     for (const object of result.affectedObjects) {
+      if (isGoldenEggObject(object)) {
+        continue;
+      }
       if (object.scoreRole !== "target") {
         continue;
       }
@@ -143,6 +169,9 @@ export class ShotScoreTracker {
   private collateralEvents(result: ExplosionResult): ScoreEvent[] {
     const events: ScoreEvent[] = [];
     for (const object of result.affectedObjects) {
+      if (isGoldenEggObject(object)) {
+        continue;
+      }
       if (object.scoreRole === "target") {
         continue;
       }
@@ -154,6 +183,19 @@ export class ShotScoreTracker {
     }
     return events.sort(sortScoreEvents).slice(0, 2);
   }
+}
+
+export function goldenEggMultiplierForRawScore(rawScore: number, options: ScoreFinalizeOptions = {}): number {
+  const chargeStart = options.goldenEggChargeStart ?? DEFAULT_GOLDEN_EGG_CHARGE_START;
+  const fullCharge = Math.max(chargeStart + 1, options.goldenEggFullCharge ?? DEFAULT_GOLDEN_EGG_FULL_CHARGE);
+  const charge = THREE.MathUtils.clamp((rawScore - chargeStart) / (fullCharge - chargeStart), 0, 1);
+  return Number((1 + (GOLDEN_EGG_MAX_MULTIPLIER - 1) * charge).toFixed(2));
+}
+
+function isGoldenEggObject(object: ExplosionAffectedObject): boolean {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  return zone.includes("golden-egg") || label.includes("golden egg");
 }
 
 function scoreEventFromObject(kind: ScoreEventKind, label: string, points: number, object: ExplosionAffectedObject): ScoreEvent {

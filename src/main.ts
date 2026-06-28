@@ -10,7 +10,7 @@ import {
 import { DestructionAudio } from "./audio";
 import { AircraftController } from "./aircraft";
 import { CameraRig } from "./cameraRig";
-import { Cannon } from "./cannon";
+import { Cannon, type CannonVisualState } from "./cannon";
 import { decorateFragment } from "./cityVisuals";
 import { withSuppressedConsoleWarning } from "./consoleWarnings";
 import { DestructionSystem, type ExplosionAffectedObject, type ExplosionResult } from "./destruction";
@@ -64,13 +64,26 @@ const FRACTURE_PROCESS_MAX_PER_FRAME = 1;
 const FRACTURE_PROCESS_TIME_BUDGET_MS = 2;
 const CHAIN_IMPACT_SWEEP_MS = 160;
 const SCORE_SETTLED_SPEED = 1.55;
+const SCORE_AUTO_REVEAL_GRACE_MS = 2500;
+const SCORE_SETTLE_QUIET_MS = 1500;
+const SCORE_RESIDUAL_ACTIVITY_MAX_WAIT_MS = 20_000;
+const SCORE_COLLISION_BACKLOG_SETTLE_LIMIT = 28;
+const SCORE_STRUCTURAL_SETTLED_SPEED = 0.95;
+const SCORE_FAST_DEBRIS_SPEED = 3.6;
+const SCORE_MOVING_DEBRIS_LIMIT = 18;
+const SCORE_FAST_DEBRIS_LIMIT = 6;
 const AIM_FALLBACK_SURFACE_Y = 0.055;
 const AIM_MARKER_SURFACE_OFFSET = 0.095;
 const FIRE_MIN_DELAY_MS = 760;
 const FIRE_MAX_DELAY_MS = 1850;
-const MAX_BURNING_HAZARDS = 18;
+const MAX_BURNING_HAZARDS = 8;
 const HAZARD_EXPLOSIONS_MAX_PER_FRAME = 1;
-const SCATTER_PHYSICAL_SHARD_COUNT = 6;
+const FIRE_SPREAD_MIN_DELAY_MS = 620;
+const FIRE_SPREAD_MAX_DELAY_MS = 1380;
+const FIRE_SPREAD_SCAN_INTERVAL_MS = 520;
+const FIRE_SPREAD_CANDIDATE_LIMIT = 3;
+const FIRE_SPREAD_MAX_CHILDREN = 1;
+const SCATTER_PHYSICAL_SHARD_COUNT = 8;
 const VOLATILE_TRIGGER_LIMIT_BY_DEPTH = [3, 1, 0] as const;
 const CAMERA_FOCUS_MIN_SCORE = 155;
 const CAMERA_FOCUS_LOCK_MS = 1100;
@@ -83,8 +96,8 @@ const GRAVITY_IMPACT_SHAKE_MAGNITUDE = 0.62;
 const GRAVITY_IMPACT_SHAKE_DURATION = 0.72;
 const GRAVITY_IMPACT_HIT_STOP_SECONDS = 0.08;
 const GRAVITY_IMPACT_SLOWMO_SECONDS = 0.42;
-const HEAVY_PROJECTILE_CAMERA_RELEASE_SPEED = 11.5;
-const HEAVY_PROJECTILE_CAMERA_RELEASE_AGE = 3.2;
+const HEAVY_PROJECTILE_CAMERA_RELEASE_SPEED = 9.5;
+const HEAVY_PROJECTILE_CAMERA_RELEASE_AGE = 3.9;
 const CANNON_DECK_OFFSETS = [
   new THREE.Vector3(0, -3.23, 1.9),
   new THREE.Vector3(-3.3, -0.22, 1.9),
@@ -94,7 +107,7 @@ const MAX_PROJECTILE_PENETRATIONS: Record<ProjectileId, number> = {
   slug: 0,
   scatter: 0,
   pulse: 0,
-  gravity: 8,
+  gravity: 11,
   ignite: 1
 };
 const IMPACT_BOUNDS = {
@@ -154,20 +167,47 @@ interface BurningHazard {
   id: number;
   label: string;
   origin: THREE.Vector3;
+  ignitedAt: number;
   explodeAt: number;
   nextFxAt: number;
+  nextSpreadAt: number;
   strength: number;
   radius: number;
+  heatRadius: number;
+  spreadCount: number;
+  maxSpreadCount: number;
   materialId: PhysicsObject["materialId"];
+  projectileId: ProjectileId;
+  color: THREE.ColorRepresentation;
+  powerScale: number;
+  sizeScale: number;
+  densityScale: number;
+  cascadeDepth: number;
+  mushroomCloud: boolean;
 }
 
 interface VolatileHazardProfile {
   strength: number;
   radius: number;
+  heatRadius: number;
   projectileId: ProjectileId;
   color: THREE.ColorRepresentation;
   powerScale: number;
   sizeScale: number;
+  densityScale: number;
+  delayScale: number;
+  maxSpreadCount: number;
+  mushroomCloud?: boolean;
+}
+
+interface ImpactBlastProfile {
+  strength: number;
+  radius: number;
+  visualRadius: number;
+  audioPowerScale: number;
+  vfxPowerScale: number;
+  sizeScale: number;
+  ignitionBias: number;
 }
 
 interface DowntownMayhemRenderStats {
@@ -203,6 +243,7 @@ interface DowntownMayhemDebugApi {
   getRenderStats(): DowntownMayhemRenderStats;
   getPerfReport(): PerfReport;
   getRenderWarmupState(): RenderWarmupState;
+  getCannonVisualState(): CannonVisualState;
   setPerfEnabled(enabled: boolean): void;
   clearPerfReport(): void;
   flushPerfLog(reason?: string): void;
@@ -512,14 +553,14 @@ function createDaySkyDome(textureRegistry: THREE.Texture[]): THREE.Group {
       map: haloTexture,
       color: 0xffe4a6,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.42,
       depthWrite: false,
-      blending: THREE.AdditiveBlending
+      blending: THREE.NormalBlending
     })
   );
   halo.name = "Warm sun halo";
   halo.position.copy(sunPosition);
-  halo.scale.set(50, 50, 1);
+  halo.scale.set(43, 43, 1);
   halo.renderOrder = -40;
   group.add(halo);
 
@@ -530,14 +571,14 @@ function createDaySkyDome(textureRegistry: THREE.Texture[]): THREE.Group {
       map: sunTexture,
       color: 0xffdd84,
       transparent: true,
-      opacity: 1,
+      opacity: 0.78,
       depthWrite: false,
-      blending: THREE.AdditiveBlending
+      blending: THREE.NormalBlending
     })
   );
   sun.name = "Soft midday sun";
   sun.position.copy(sunPosition.clone().multiplyScalar(0.995));
-  sun.scale.set(13.5, 13.5, 1);
+  sun.scale.set(11.4, 11.4, 1);
   sun.renderOrder = -35;
   group.add(sun);
 
@@ -554,10 +595,10 @@ function createDaySkyTexture(): THREE.CanvasTexture {
   }
 
   const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, "#2d9bf4");
-  gradient.addColorStop(0.38, "#76caff");
-  gradient.addColorStop(0.72, "#c5efff");
-  gradient.addColorStop(1, "#f6d8a7");
+  gradient.addColorStop(0, "#236ec7");
+  gradient.addColorStop(0.36, "#5db9ec");
+  gradient.addColorStop(0.72, "#b9e3ef");
+  gradient.addColorStop(1, "#e8d0a4");
   context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -569,8 +610,8 @@ function createDaySkyTexture(): THREE.CanvasTexture {
     canvas.height * 1.08,
     canvas.width * 0.64
   );
-  horizonGlow.addColorStop(0, "rgba(255, 236, 184, 0.48)");
-  horizonGlow.addColorStop(0.46, "rgba(255, 226, 160, 0.2)");
+  horizonGlow.addColorStop(0, "rgba(242, 219, 170, 0.26)");
+  horizonGlow.addColorStop(0.46, "rgba(226, 199, 138, 0.1)");
   horizonGlow.addColorStop(1, "rgba(118, 190, 255, 0)");
   context.fillStyle = horizonGlow;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -583,16 +624,16 @@ function createDaySkyTexture(): THREE.CanvasTexture {
     canvas.height * 0.22,
     canvas.width * 0.42
   );
-  sunWash.addColorStop(0, "rgba(255, 246, 206, 0.58)");
-  sunWash.addColorStop(0.36, "rgba(255, 214, 120, 0.26)");
-  sunWash.addColorStop(1, "rgba(255, 224, 149, 0)");
+  sunWash.addColorStop(0, "rgba(255, 241, 199, 0.32)");
+  sunWash.addColorStop(0.34, "rgba(239, 197, 109, 0.13)");
+  sunWash.addColorStop(1, "rgba(236, 205, 137, 0)");
   context.fillStyle = sunWash;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
-  paintCloud(context, 150, 128, 1.25, 0.2);
-  paintCloud(context, 378, 96, 0.92, 0.16);
-  paintCloud(context, 724, 146, 1.5, 0.18);
-  paintCloud(context, 884, 216, 1.08, 0.13);
+  paintCloud(context, 150, 128, 1.25, 0.14);
+  paintCloud(context, 378, 96, 0.92, 0.11);
+  paintCloud(context, 724, 146, 1.5, 0.12);
+  paintCloud(context, 884, 216, 1.08, 0.09);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -611,16 +652,16 @@ function createSkyReflectionTexture(): THREE.CanvasTexture {
   }
 
   const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, "#69bdf4");
-  gradient.addColorStop(0.44, "#c8ecf7");
-  gradient.addColorStop(0.58, "#f1d49c");
-  gradient.addColorStop(1, "#1a252c");
+  gradient.addColorStop(0, "#4fa4dc");
+  gradient.addColorStop(0.44, "#a9d6e4");
+  gradient.addColorStop(0.58, "#d7bc83");
+  gradient.addColorStop(1, "#151f24");
   context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   const sun = context.createRadialGradient(canvas.width * 0.22, canvas.height * 0.22, 5, canvas.width * 0.22, canvas.height * 0.22, 98);
-  sun.addColorStop(0, "rgba(255, 250, 218, 0.9)");
-  sun.addColorStop(0.34, "rgba(255, 216, 122, 0.38)");
+  sun.addColorStop(0, "rgba(255, 244, 205, 0.52)");
+  sun.addColorStop(0.34, "rgba(235, 194, 104, 0.18)");
   sun.addColorStop(1, "rgba(255, 216, 122, 0)");
   context.fillStyle = sun;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -659,9 +700,9 @@ function createGroundSunlightTexture(): THREE.CanvasTexture {
 
   context.clearRect(0, 0, canvas.width, canvas.height);
   const wash = context.createRadialGradient(170, 132, 20, 196, 166, 470);
-  wash.addColorStop(0, "rgba(255, 244, 190, 0.34)");
-  wash.addColorStop(0.42, "rgba(255, 213, 118, 0.16)");
-  wash.addColorStop(1, "rgba(255, 198, 96, 0)");
+  wash.addColorStop(0, "rgba(245, 226, 168, 0.18)");
+  wash.addColorStop(0.42, "rgba(222, 177, 87, 0.075)");
+  wash.addColorStop(1, "rgba(218, 174, 84, 0)");
   context.fillStyle = wash;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -672,9 +713,9 @@ function createGroundSunlightTexture(): THREE.CanvasTexture {
     const x = index * 118;
     const band = context.createLinearGradient(x - 42, -260, x + 78, 260);
     band.addColorStop(0, "rgba(255, 255, 255, 0)");
-    band.addColorStop(0.42, "rgba(255, 241, 176, 0.08)");
-    band.addColorStop(0.5, "rgba(255, 229, 138, 0.18)");
-    band.addColorStop(0.58, "rgba(255, 241, 176, 0.08)");
+    band.addColorStop(0.42, "rgba(246, 224, 151, 0.04)");
+    band.addColorStop(0.5, "rgba(232, 188, 93, 0.085)");
+    band.addColorStop(0.58, "rgba(246, 224, 151, 0.04)");
     band.addColorStop(1, "rgba(255, 255, 255, 0)");
     context.fillStyle = band;
     context.fillRect(x - 46, -320, 124, 640);
@@ -735,16 +776,16 @@ function createDistantAtmosphereTexture(): THREE.CanvasTexture {
     canvas.height * 0.52,
     canvas.width * 0.58
   );
-  airGlow.addColorStop(0, "rgba(248, 254, 255, 0.08)");
-  airGlow.addColorStop(0.42, "rgba(190, 231, 240, 0.1)");
+  airGlow.addColorStop(0, "rgba(226, 244, 248, 0.05)");
+  airGlow.addColorStop(0.42, "rgba(164, 207, 218, 0.07)");
   airGlow.addColorStop(1, "rgba(190, 231, 240, 0)");
   context.fillStyle = airGlow;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   const haze = context.createLinearGradient(0, canvas.height * 0.55, 0, canvas.height);
   haze.addColorStop(0, "rgba(188, 235, 255, 0)");
-  haze.addColorStop(0.5, "rgba(199, 232, 238, 0.1)");
-  haze.addColorStop(0.8, "rgba(246, 219, 170, 0.14)");
+  haze.addColorStop(0.5, "rgba(176, 214, 222, 0.065)");
+  haze.addColorStop(0.8, "rgba(218, 189, 131, 0.085)");
   haze.addColorStop(1, "rgba(246, 219, 170, 0)");
   context.fillStyle = haze;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -756,7 +797,7 @@ function createDistantAtmosphereTexture(): THREE.CanvasTexture {
     const x = index * 165;
     const band = context.createLinearGradient(x - 130, 0, x + 180, 0);
     band.addColorStop(0, "rgba(255, 255, 255, 0)");
-    band.addColorStop(0.5, "rgba(236, 246, 244, 0.075)");
+    band.addColorStop(0.5, "rgba(209, 228, 226, 0.045)");
     band.addColorStop(1, "rgba(255, 255, 255, 0)");
     context.fillStyle = band;
     context.fillRect(x - 145, -18, 330, 36);
@@ -783,17 +824,17 @@ function createIndustrialHazeTexture(): THREE.CanvasTexture {
   context.clearRect(0, 0, canvas.width, canvas.height);
   const base = context.createLinearGradient(0, 0, 0, canvas.height);
   base.addColorStop(0, "rgba(210, 242, 255, 0)");
-  base.addColorStop(0.36, "rgba(187, 231, 238, 0.12)");
-  base.addColorStop(0.72, "rgba(240, 205, 149, 0.2)");
+  base.addColorStop(0.36, "rgba(159, 207, 218, 0.075)");
+  base.addColorStop(0.72, "rgba(207, 167, 102, 0.105)");
   base.addColorStop(1, "rgba(240, 205, 149, 0)");
   context.fillStyle = base;
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   for (const band of [
-    [18, 82, 0.18, 0.16],
-    [118, 118, -0.1, 0.14],
-    [260, 68, 0.08, 0.1],
-    [344, 148, -0.16, 0.12]
+    [18, 82, 0.18, 0.095],
+    [118, 118, -0.1, 0.08],
+    [260, 68, 0.08, 0.065],
+    [344, 148, -0.16, 0.075]
   ] as const) {
     const [x, y, tilt, opacity] = band;
     context.save();
@@ -2132,6 +2173,7 @@ class Game {
   private readonly aimSurfaceHits: THREE.Intersection<THREE.Object3D>[] = [];
   private readonly projectileSegmentCandidates: PhysicsObject[] = [];
   private readonly aircraftSegmentCandidates: PhysicsObject[] = [];
+  private readonly fireSpreadCandidates: PhysicsObject[] = [];
   private readonly projectileCurrentPosition = new THREE.Vector3();
   private readonly projectilePreviousPosition = new THREE.Vector3();
   private readonly aircraftCurrentPosition = new THREE.Vector3();
@@ -2188,6 +2230,10 @@ class Game {
   private mayhemContract: MayhemContract | null = null;
   private shotMayhemContract: MayhemContract | null = null;
   private readonly chainMilestonesAwarded = new Set<number>();
+  private scoreReadyToFinalize = false;
+  private scoreAutoRevealAt: number | null = null;
+  private scoreSpectacleStartedAt: number | null = null;
+  private scoreSettleLastActivityAt: number | null = null;
   private status = "Aim the siege cannon from the high battery.";
   private slowMotionTimer = 0;
   private hitStopTimer = 0;
@@ -2326,6 +2372,10 @@ class Game {
     return { ...this.renderWarmupState };
   }
 
+  getCannonVisualState(): CannonVisualState {
+    return this.cannon.getVisualState();
+  }
+
   flushPerfLog(reason?: string): void {
     this.perfDiskLogger?.flush(reason ?? "manual");
   }
@@ -2337,6 +2387,10 @@ class Game {
   freezeForCapture(): DowntownMayhemRenderStats {
     this.frozenForCapture = true;
     void this.renderer.setAnimationLoop(null);
+    if (this.gameMode === "cannon" && this.runState.phase === "aim") {
+      this.cameraRig.setCityAimView(this.cannon.getCameraAnchor(), this.currentLevel().cameraTarget);
+    }
+    this.cameraRig.snapToDesiredView();
     this.renderer.render(this.scene, this.cameraRig.camera);
     return this.captureRenderStats();
   }
@@ -2520,7 +2574,7 @@ class Game {
       projectile: PROJECTILES[this.selectedProjectile],
       shotAvailable: this.runState.shotAvailable,
       isFlyingRun: this.gameMode === "plane" && this.runState.phase === "flight" && !this.aircraft.isCrashed(),
-      canFinishRun: this.runState.phase === "spectacle" && !this.runState.score,
+      canFinishRun: this.runState.phase === "spectacle" && !this.runState.score && this.scoreReadyToFinalize,
       bodyCount: this.physics.getDynamicBodyCount(),
       levelName: level.name,
       levelDescription: level.description,
@@ -2563,12 +2617,25 @@ class Game {
   private resetRunTelemetry(): void {
     this.shotMayhemContract = null;
     this.chainMilestonesAwarded.clear();
+    this.scoreReadyToFinalize = false;
+    this.scoreAutoRevealAt = null;
+    this.scoreSpectacleStartedAt = null;
+    this.scoreSettleLastActivityAt = null;
+  }
+
+  private beginSpectacle(nowMs = performance.now()): void {
+    this.scoreReadyToFinalize = false;
+    this.scoreAutoRevealAt = null;
+    this.scoreSpectacleStartedAt = nowMs;
+    this.scoreSettleLastActivityAt = nowMs;
+    this.runState.beginSpectacle(nowMs);
   }
 
   private pushScoreEvents(events: ScoreEvent[], revealDelaySeconds = 0): void {
     if (events.length === 0) {
       return;
     }
+    this.scoreSettleLastActivityAt = performance.now();
     this.scorePopups.push(events, revealDelaySeconds);
     const milestone = this.nextChainMilestone(events);
     if (milestone) {
@@ -2746,12 +2813,28 @@ class Game {
   }
 
   private updateScoreReveal(): void {
-    const scoreRevealDecision = this.runState.evaluateScoreReveal(performance.now(), this.isSceneSettled());
+    const now = performance.now();
+    const sceneSettled = this.isSceneSettled();
+    const scoreRevealDecision = this.runState.evaluateScoreReveal(now, sceneSettled);
     if (scoreRevealDecision === "waiting") {
-      this.status = "Scoring active chain reactions...";
+      this.scoreReadyToFinalize = false;
+      this.scoreAutoRevealAt = null;
+      this.status = sceneSettled
+        ? "Confirming the district is settled..."
+        : "Watching active explosions and collapses...";
       return;
     }
     if (scoreRevealDecision === "ready") {
+      if (!this.scoreReadyToFinalize) {
+        this.scoreReadyToFinalize = true;
+        this.scoreAutoRevealAt = now + SCORE_AUTO_REVEAL_GRACE_MS;
+        this.status = "Mayhem settled. Scoring in a moment.";
+        return;
+      }
+      if (this.scoreAutoRevealAt === null || now < this.scoreAutoRevealAt) {
+        this.status = "Mayhem settled. Tap to score.";
+        return;
+      }
       this.finalizeScore();
     }
   }
@@ -2886,9 +2969,9 @@ class Game {
     const sunlightMaterial = new THREE.MeshBasicMaterial({
       map: sunlightTexture,
       transparent: true,
-      opacity: 0.58,
+      opacity: 0.34,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       toneMapped: false
     });
     this.addArenaDecalPlane(
@@ -2904,7 +2987,7 @@ class Game {
     const cityShadowMaterial = new THREE.MeshBasicMaterial({
       map: shadowTexture,
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.42,
       depthWrite: false,
       toneMapped: false
     });
@@ -2939,7 +3022,7 @@ class Game {
     const atmosphereMaterial = new THREE.MeshBasicMaterial({
       map: atmosphereTexture,
       transparent: true,
-      opacity: 0.86,
+      opacity: 0.68,
       depthWrite: false,
       fog: false,
       toneMapped: false
@@ -2956,9 +3039,9 @@ class Game {
     const hazeMaterial = new THREE.MeshBasicMaterial({
       map: hazeTexture,
       transparent: true,
-      opacity: 0.52,
+      opacity: 0.28,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       fog: false,
       toneMapped: false
     });
@@ -3872,15 +3955,24 @@ class Game {
     if (this.ui.isGameplayBlocked() || this.runState.phase !== "spectacle" || this.runState.score) {
       return;
     }
+    if (!this.scoreReadyToFinalize) {
+      this.status = this.isSceneSettled()
+        ? "Confirming the district is settled..."
+        : "Watching active explosions and collapses...";
+      return;
+    }
     this.finalizeScore("Score locked manually.");
   }
 
   private finalizeScore(statusPrefix = ""): void {
-    if (this.runState.phase !== "spectacle" || this.runState.score) {
+    if (this.runState.phase !== "spectacle" || this.runState.score || !this.scoreReadyToFinalize) {
       return;
     }
-    const score = this.scoreTracker.finalize(this.physics);
     const level = this.currentLevel();
+    const score = this.scoreTracker.finalize(this.physics, {
+      goldenEggChargeStart: level.mission.scoreThresholds.oneStar,
+      goldenEggFullCharge: level.mission.scoreThresholds.threeStar
+    });
     const shotContract = this.shotMayhemContract ?? this.mayhemContract;
     const previousProgress = this.currentLevelProgress();
     const previousBestScore = previousProgress?.bestScore ?? 0;
@@ -3906,6 +3998,8 @@ class Game {
     };
     saveArcadeProgress(this.arcadeProgress);
     this.audio.playScoreCeremony(score.totalScore, recorded.result.stars, recorded.result.completed);
+    this.scoreReadyToFinalize = false;
+    this.scoreAutoRevealAt = null;
     this.status = `${statusPrefix}${statusPrefix ? " " : ""}${scoreStatus(score, recorded.result)}`;
     this.perfDiskLogger?.flush("score-finalized");
   }
@@ -4138,7 +4232,7 @@ class Game {
       this.cameraRig.shake(GRAVITY_IMPACT_SHAKE_MAGNITUDE, GRAVITY_IMPACT_SHAKE_DURATION);
       this.hitStopTimer = this.settings.motionEffects ? GRAVITY_IMPACT_HIT_STOP_SECONDS : 0;
       this.slowMotionTimer = this.settings.motionEffects ? GRAVITY_IMPACT_SLOWMO_SECONDS : 0;
-      this.runState.beginSpectacle(performance.now());
+      this.beginSpectacle();
       this.status = directResult
         ? `${projectile.name} impact: ${directResult.fracturedBodies} direct fractures, no blast.`
         : `${projectile.name} spent its velocity without detonating.`;
@@ -4189,32 +4283,30 @@ class Game {
 
     options.cleanupSource();
 
-    const strength = projectile.impulse * powerScale * projectile.fractureBoost * residualBlastScale(projectile.id);
-    const radius = projectile.blastRadius * sizeScale * residualBlastRadiusScale(projectile.id);
-    const visualRadius = projectile.blastRadius * sizeScale * impactVisualRadiusScale(projectile.id);
-    const result = this.destruction.explode(point, strength, radius);
+    const blastProfile = impactBlastProfile(projectile, hitObject, powerScale, sizeScale, sourceSpeed, this.materials);
+    const result = this.destruction.explode(point, blastProfile.strength, blastProfile.radius);
     this.audio.playProjectileImpact({
       point,
       projectileId: projectile.id,
       result,
-      powerScale,
-      sizeScale,
+      powerScale: blastProfile.audioPowerScale,
+      sizeScale: blastProfile.sizeScale,
       hitMaterialId: hitObject?.materialId,
       role: "primary"
     });
     this.focusSpectacleOn(point, result, 160, true);
     const scoreEvents = [
       ...directResults.flatMap((directResult) => this.applyExplosionResult(directResult, 0, projectile.id === "ignite" ? 1 : 0)),
-      ...this.applyExplosionResult(result, 0, projectile.id === "ignite" ? 1.35 : projectile.id === "pulse" ? 0.35 : 0),
+      ...this.applyExplosionResult(result, 0, blastProfile.ignitionBias),
       ...(options.specialActive ? this.playProjectileSpecial(projectile.id, point, directionVector, options.specialActive) : [])
     ];
     this.pushScoreEvents(scoreEvents, scorePopupImpactDelay(projectile.id));
 
-    this.explosion.play(point, visualRadius, result.dustColors, {
+    this.explosion.play(point, blastProfile.visualRadius, result.dustColors, {
       projectileId: projectile.id,
       result,
-      powerScale,
-      sizeScale,
+      powerScale: blastProfile.vfxPowerScale,
+      sizeScale: blastProfile.sizeScale,
       hitMaterialId: hitObject?.materialId,
       impactDirection: directionVector,
       role: "primary"
@@ -4224,7 +4316,7 @@ class Game {
     this.cameraRig.shake(shake.magnitude, shake.duration);
     this.hitStopTimer = this.settings.motionEffects ? projectileImpactHitStop(projectile.id) : 0;
     this.slowMotionTimer = this.settings.motionEffects ? projectileImpactSlowMo(projectile.id) : 0;
-    this.runState.beginSpectacle(performance.now());
+    this.beginSpectacle();
     const directFractures = directResults.reduce((total, directResult) => total + directResult.fracturedBodies, 0);
     const directHits = directResults.reduce((total, directResult) => total + directResult.affectedBodies, 0);
     this.status = `${options.statusName} impact: ${directFractures + result.fracturedBodies} fractures, ${
@@ -4310,19 +4402,19 @@ class Game {
       return false;
     }
     const releaseSpeed = HEAVY_PROJECTILE_CAMERA_RELEASE_SPEED * Math.max(0.85, active.powerScale);
-    if (active.piercedObjectIds.size >= 3 && retainedSpeed <= releaseSpeed) {
+    if (active.piercedObjectIds.size >= 4 && retainedSpeed <= releaseSpeed) {
       return true;
     }
-    if (active.piercedObjectIds.size >= 6) {
+    if (active.piercedObjectIds.size >= 9) {
       return true;
     }
-    return active.age >= HEAVY_PROJECTILE_CAMERA_RELEASE_AGE && retainedSpeed <= releaseSpeed * 1.45;
+    return active.age >= HEAVY_PROJECTILE_CAMERA_RELEASE_AGE && retainedSpeed <= releaseSpeed * 1.32;
   }
 
   private releaseProjectileCameraToSpectacle(fallback: THREE.Vector3): void {
     this.focusProjectileSpectacle(fallback);
     this.projectiles.releaseActive();
-    this.runState.beginSpectacle(performance.now());
+    this.beginSpectacle();
     this.status = `${PROJECTILES.gravity.name} spent its momentum; watching the damage unfold.`;
   }
 
@@ -4394,7 +4486,7 @@ class Game {
     if (result.fracturedBodies > 0 && this.shouldReleaseHeavyProjectileAfterPenetration(active, retainedSpeed)) {
       this.focusSpectacleOn(point, result, 130, true);
       this.projectiles.releaseActive();
-      this.runState.beginSpectacle(performance.now());
+      this.beginSpectacle();
       this.status = `${active.definition.name} punched through; watching the collapse.`;
       return;
     }
@@ -4457,32 +4549,12 @@ class Game {
       this.triggeredHazards.add(object.id);
       const origin = object.position.clone().add(new THREE.Vector3(0, 0.22, 0));
       const profile = volatileHazardProfile(object);
-      const secondary = this.destruction.explode(origin, profile.strength, profile.radius);
-      this.focusSpectacleOn(origin, secondary, hazardCameraFocusBonus(object));
-      this.explosion.play(origin, profile.radius * 1.35, secondary.dustColors, {
-        projectileId: profile.projectileId,
-        result: secondary,
-        powerScale: profile.powerScale,
-        sizeScale: profile.sizeScale,
-        densityScale: 0.66,
-        hitMaterialId: object.materialId,
-        role: "secondary"
-      });
-      this.particles.spark(origin, profile.color, profile.projectileId === "ignite" ? 2.1 : 1.7);
-      if (secondary.dustColors.length > 0) {
-        this.particles.cityDebrisSpray(origin, secondary.dustColors, 0.3 + secondary.fracturedBodies * 0.045);
+      const queued = this.queueBurningHazardFromAffectedObject(object, profile, origin, cascadeDepth);
+      if (queued) {
+        this.particles.fireBurst(origin, 0.95 + profile.powerScale * 0.35);
+        this.particles.armingPulse(origin, 0.6, profile.color);
+        this.focusSpectacleOn(origin, result, hazardCameraFocusBonus(object));
       }
-      this.audio.playProjectileImpact({
-        point: origin,
-        projectileId: profile.projectileId,
-        result: secondary,
-        powerScale: profile.powerScale,
-        sizeScale: profile.sizeScale,
-        hitMaterialId: object.materialId,
-        role: "secondary"
-      });
-      events.push(...this.scoreTracker.addChainReaction(Math.max(70, Math.round(secondary.materialChaos * 0.35)), origin, hazardExplosionLabel(object)));
-      events.push(...this.applyExplosionResult(secondary, cascadeDepth + 1));
     }
     return events;
   }
@@ -4491,7 +4563,6 @@ class Game {
     if (igniteBias <= 0 && cascadeDepth > 0) {
       return;
     }
-    const now = performance.now();
     for (const object of result.affectedObjects) {
       if (this.burningHazards.size >= MAX_BURNING_HAZARDS) {
         return;
@@ -4514,22 +4585,54 @@ class Game {
       if (igniteBias < 0.95 && Math.random() > ignitionChance) {
         continue;
       }
-      const delay = THREE.MathUtils.lerp(FIRE_MAX_DELAY_MS, FIRE_MIN_DELAY_MS, THREE.MathUtils.clamp(igniteBias + energyRatio * 0.18, 0, 1));
-      const radius = object.zoneId?.includes("power-grid") ? 2.15 : object.materialId === "foam" ? 2.65 : 2.35;
-      const strength = object.materialId === "wood" || object.materialId === "foam" ? 18 : 14;
       const origin = ignitionOriginForObject(sourceObject);
-      this.burningHazards.set(object.id, {
-        id: object.id,
-        label: ignitionExplosionLabel(object),
+      const delay = THREE.MathUtils.lerp(FIRE_MAX_DELAY_MS, FIRE_MIN_DELAY_MS, THREE.MathUtils.clamp(igniteBias + energyRatio * 0.18, 0, 1));
+      this.queueBurningHazardFromAffectedObject(
+        object,
+        ignitionHazardProfile(object, igniteBias, energyRatio),
         origin,
-        explodeAt: now + delay + Math.random() * 320,
-        nextFxAt: now,
-        strength,
-        radius,
-        materialId: object.materialId
-      });
+        cascadeDepth,
+        delay + Math.random() * 320
+      );
       this.particles.fireBurst(origin, 0.72 + igniteBias * 0.45);
     }
+  }
+
+  private queueBurningHazardFromAffectedObject(
+    object: ExplosionAffectedObject,
+    profile: VolatileHazardProfile,
+    origin: THREE.Vector3,
+    cascadeDepth: number,
+    delayMs?: number
+  ): boolean {
+    if (this.burningHazards.size >= MAX_BURNING_HAZARDS || this.burningHazards.has(object.id)) {
+      return false;
+    }
+    const now = performance.now();
+    const delay = delayMs ?? THREE.MathUtils.lerp(FIRE_MAX_DELAY_MS, FIRE_MIN_DELAY_MS, THREE.MathUtils.clamp(profile.delayScale, 0, 1));
+    this.burningHazards.set(object.id, {
+      id: object.id,
+      label: ignitionExplosionLabel(object),
+      origin: origin.clone(),
+      ignitedAt: now,
+      explodeAt: now + delay + Math.random() * 260,
+      nextFxAt: now,
+      nextSpreadAt: now + THREE.MathUtils.randInt(FIRE_SPREAD_MIN_DELAY_MS, FIRE_SPREAD_MAX_DELAY_MS),
+      strength: profile.strength,
+      radius: profile.radius,
+      heatRadius: profile.heatRadius,
+      spreadCount: 0,
+      maxSpreadCount: profile.maxSpreadCount,
+      materialId: object.materialId,
+      projectileId: profile.projectileId,
+      color: profile.color,
+      powerScale: profile.powerScale,
+      sizeScale: profile.sizeScale,
+      densityScale: profile.densityScale,
+      cascadeDepth,
+      mushroomCloud: Boolean(profile.mushroomCloud)
+    });
+    return true;
   }
 
   private updateBurningHazards(): ScoreEvent[] {
@@ -4539,7 +4642,7 @@ class Game {
     }
     const now = performance.now();
     let detonationsThisFrame = 0;
-    for (const hazard of this.burningHazards.values()) {
+    for (const hazard of [...this.burningHazards.values()]) {
       const sourceObject = this.physics.getObject(hazard.id);
       if (!sourceObject) {
         this.burningHazards.delete(hazard.id);
@@ -4547,14 +4650,19 @@ class Game {
       }
       hazard.origin.copy(ignitionOriginForObject(sourceObject));
       const remainingMs = hazard.explodeAt - now;
+      const burnAge = THREE.MathUtils.clamp((now - hazard.ignitedAt) / Math.max(1, hazard.explodeAt - hazard.ignitedAt), 0, 1);
       if (now >= hazard.nextFxAt) {
-        this.particles.fireLick(hazard.origin, 0.62);
+        this.particles.fireLick(hazard.origin, 0.56 + burnAge * 0.5);
         if (remainingMs < 820) {
           const warningProgress = 1 - Math.max(0, remainingMs) / 820;
           this.particles.armingPulse(hazard.origin, warningProgress, ignitionWarningColor(hazard));
           this.audio.playHazardWarning(hazard.origin, warningProgress, hazard.materialId);
         }
         hazard.nextFxAt = now + (remainingMs < 820 ? 110 : 180);
+      }
+      if (now >= hazard.nextSpreadAt && remainingMs > 260 && hazard.spreadCount < hazard.maxSpreadCount) {
+        events.push(...this.spreadBurningHazard(hazard));
+        hazard.nextSpreadAt = now + FIRE_SPREAD_SCAN_INTERVAL_MS + Math.random() * 360;
       }
       if (now < hazard.explodeAt) {
         continue;
@@ -4566,30 +4674,76 @@ class Game {
       detonationsThisFrame += 1;
       this.burningHazards.delete(hazard.id);
       const result = this.destruction.explode(hazard.origin, hazard.strength, hazard.radius);
-      this.focusSpectacleOn(hazard.origin, result, 145);
+      this.focusSpectacleOn(hazard.origin, result, hazard.mushroomCloud ? 260 : 145);
       this.explosion.play(hazard.origin, hazard.radius * 1.24, result.dustColors, {
-        projectileId: "ignite",
+        projectileId: hazard.projectileId,
         result,
-        powerScale: 0.76,
-        sizeScale: 0.82,
-        densityScale: 0.62,
+        powerScale: hazard.powerScale,
+        sizeScale: hazard.sizeScale,
+        densityScale: hazard.densityScale,
         hitMaterialId: hazard.materialId,
-        role: "ignition"
+        role: "ignition",
+        variant: hazard.mushroomCloud ? "mushroom" : undefined
       });
-      this.particles.fireBurst(hazard.origin, 1.25);
+      this.particles.fireBurst(hazard.origin, hazard.mushroomCloud ? 2.7 : 1.25);
       this.audio.playProjectileImpact({
         point: hazard.origin,
-        projectileId: "ignite",
+        projectileId: hazard.projectileId,
         result,
-        powerScale: 0.76,
-        sizeScale: 0.82,
+        powerScale: hazard.powerScale,
+        sizeScale: hazard.sizeScale,
         hitMaterialId: hazard.materialId,
         role: "ignition"
       });
       events.push(...this.scoreTracker.addChainReaction(Math.max(58, Math.round((result.materialChaos + result.structureDamage) * 0.28)), hazard.origin, hazard.label));
-      events.push(...this.applyExplosionResult(result, 1, 0.18));
+      events.push(...this.applyExplosionResult(result, Math.min(2, hazard.cascadeDepth + 1), hazard.mushroomCloud ? 0.8 : 0.24));
     }
     return events;
+  }
+
+  private spreadBurningHazard(hazard: BurningHazard): ScoreEvent[] {
+    if (this.burningHazards.size >= MAX_BURNING_HAZARDS) {
+      return [];
+    }
+    const candidates = this.physics
+      .getBlastCandidatesInto(this.fireSpreadCandidates, hazard.origin, hazard.heatRadius)
+      .filter((candidate) => candidate.id !== hazard.id && !this.burningHazards.has(candidate.id) && canIgnitePhysicsObject(candidate))
+      .sort((a, b) => fireSpreadPriority(b, hazard.origin) - fireSpreadPriority(a, hazard.origin))
+      .slice(0, FIRE_SPREAD_CANDIDATE_LIMIT);
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const target = candidates[0];
+    hazard.spreadCount += 1;
+    const origin = ignitionOriginForObject(target);
+    const pseudoAffected = affectedObjectFromPhysics(target, origin, hazard.strength * 0.42);
+    const profile = ignitionHazardProfile(pseudoAffected, 0.55, hazard.strength / Math.max(1, target.scoreValue));
+    profile.strength = Math.max(profile.strength, hazard.strength * 0.56);
+    profile.radius = Math.max(profile.radius, hazard.radius * 0.64);
+    profile.heatRadius = Math.max(profile.heatRadius, hazard.heatRadius * 0.72);
+    profile.maxSpreadCount = Math.min(FIRE_SPREAD_MAX_CHILDREN, Math.max(1, hazard.maxSpreadCount - hazard.spreadCount));
+    const queued = this.queueBurningHazardFromAffectedObject(
+      pseudoAffected,
+      profile,
+      origin,
+      Math.min(2, hazard.cascadeDepth + 1),
+      THREE.MathUtils.randInt(FIRE_SPREAD_MIN_DELAY_MS, FIRE_SPREAD_MAX_DELAY_MS)
+    );
+    if (!queued) {
+      return [];
+    }
+
+    this.particles.fireBurst(origin, 0.72);
+    this.particles.fireLick(hazard.origin, 0.9);
+    const heatPulse = this.destruction.explode(hazard.origin, hazard.strength * 0.16, Math.min(hazard.heatRadius, hazard.radius * 0.78));
+    if (heatPulse.affectedBodies === 0) {
+      return [];
+    }
+    return [
+      ...this.scoreTracker.addChainReaction(Math.max(24, Math.round(heatPulse.materialChaos * 0.12)), hazard.origin, `${hazardSourceLabel(pseudoAffected)} CATCHES FIRE`),
+      ...this.applyExplosionResult(heatPulse, Math.min(2, hazard.cascadeDepth + 1), 0.12)
+    ];
   }
 
   private processDebrisImpacts(): ScoreEvent[] {
@@ -4767,18 +4921,54 @@ class Game {
     return events;
   }
 
-  private isSceneSettled(): boolean {
-    if (this.destruction.getQueuedFractureCount() > 0) {
+  private isSceneSettled(now = performance.now()): boolean {
+    const spectacleStartedAt = this.scoreSpectacleStartedAt ?? now;
+    const lastActivityAt = this.scoreSettleLastActivityAt ?? spectacleStartedAt;
+    const residualActivityExpired = now - spectacleStartedAt >= SCORE_RESIDUAL_ACTIVITY_MAX_WAIT_MS;
+    if (!residualActivityExpired && this.burningHazards.size > 0) {
       return false;
     }
-    if (this.burningHazards.size > 0) {
+    if (!residualActivityExpired && this.destruction.getQueuedFractureCount() > 0) {
       return false;
     }
+    const physicsStats = this.physics.getRuntimeStats();
+    if (!residualActivityExpired && physicsStats.pendingSupportReleaseCount > 0) {
+      return false;
+    }
+    const collisionBacklog =
+      this.physics.getPendingCollisionBacklogCount() + this.physics.getPendingSurfaceCollisionBacklogCount();
+    if (!residualActivityExpired && collisionBacklog > SCORE_COLLISION_BACKLOG_SETTLE_LIMIT) {
+      return false;
+    }
+    if (!residualActivityExpired && now - lastActivityAt < SCORE_SETTLE_QUIET_MS) {
+      return false;
+    }
+    let movingStructureCount = 0;
+    let movingDebrisCount = 0;
+    let fastDebrisCount = 0;
     for (const object of this.physics.objects.values()) {
       if (object.category === "projectile" || object.bodyType === "fixed" || object.body.isSleeping()) {
         continue;
       }
-      if (speedOf(object) >= SCORE_SETTLED_SPEED) {
+      const speed = speedOf(object);
+      if (object.isDebris || object.category === "debris") {
+        if (speed >= SCORE_SETTLED_SPEED) {
+          movingDebrisCount += 1;
+        }
+        if (speed >= SCORE_FAST_DEBRIS_SPEED) {
+          fastDebrisCount += 1;
+        }
+        continue;
+      }
+      if (speed >= SCORE_STRUCTURAL_SETTLED_SPEED) {
+        movingStructureCount += 1;
+      }
+    }
+    if (!residualActivityExpired) {
+      if (movingStructureCount > 0) {
+        return false;
+      }
+      if (movingDebrisCount > SCORE_MOVING_DEBRIS_LIMIT || fastDebrisCount > SCORE_FAST_DEBRIS_LIMIT) {
         return false;
       }
     }
@@ -4787,20 +4977,20 @@ class Game {
 
   private spawnScatterFragments(origin: THREE.Vector3, direction: THREE.Vector3, sizeScale: number): void {
     const material = this.materials.get("metal");
-    const renderMaterial = this.materials.getRenderMaterial("metal");
+    const renderMaterial = this.projectiles.getRenderMaterial("scatter");
     for (let i = 0; i < SCATTER_PHYSICAL_SHARD_COUNT; i += 1) {
       const scatterDirection = direction
         .clone()
-        .add(new THREE.Vector3(randomRange(this.rng, -0.4, 0.4), randomRange(this.rng, 0, 0.55), randomRange(this.rng, -0.4, 0.4)))
+        .add(new THREE.Vector3(randomRange(this.rng, -0.55, 0.55), randomRange(this.rng, 0.05, 0.72), randomRange(this.rng, -0.55, 0.55)))
         .normalize();
       this.physics.addDynamicSphere({
         label: "Scatter shard",
         material,
         renderMaterial,
-        position: origin.clone().add(scatterDirection.clone().multiplyScalar(0.22)),
-        radius: 0.07 * sizeScale,
-        linearVelocity: scatterDirection.multiplyScalar(randomRange(this.rng, 13, 24)),
-        angularVelocity: new THREE.Vector3(randomRange(this.rng, 0, 7), randomRange(this.rng, 0, 7), randomRange(this.rng, 0, 7)),
+        position: origin.clone().add(scatterDirection.clone().multiplyScalar(0.28)),
+        radius: 0.095 * sizeScale,
+        linearVelocity: scatterDirection.multiplyScalar(randomRange(this.rng, 16, 29)),
+        angularVelocity: new THREE.Vector3(randomRange(this.rng, 2, 11), randomRange(this.rng, 2, 11), randomRange(this.rng, 2, 11)),
         category: "debris",
         isDebris: true,
         chainSource: true,
@@ -4824,8 +5014,8 @@ class Game {
     }
     side.normalize();
     const performanceMode = this.settings.graphicsQuality === "performance";
-    const clusterCount = performanceMode ? 2 : 4;
-    const secondaryDensity = performanceMode ? 0.36 : 0.68;
+    const clusterCount = performanceMode ? 2 : 5;
+    const secondaryDensity = performanceMode ? 0.42 : 0.82;
     for (let i = 0; i < clusterCount; i += 1) {
       const lateral = (i - (clusterCount - 1) * 0.5) * 0.74 * active.sizeScale;
       const depth = randomRange(this.rng, 0.35, 1.42) * active.sizeScale;
@@ -4835,8 +5025,8 @@ class Game {
         .add(forward.clone().multiplyScalar(depth))
         .add(side.clone().multiplyScalar(lateral))
         .add(new THREE.Vector3(0, lift, 0));
-      const cluster = this.destruction.explode(clusterOrigin, 7.4 * active.powerScale, 1.22 * active.sizeScale);
-      this.explosion.play(clusterOrigin, 1.55 * active.sizeScale, cluster.dustColors, {
+      const cluster = this.destruction.explode(clusterOrigin, 9.8 * active.powerScale, 1.42 * active.sizeScale);
+      this.explosion.play(clusterOrigin, 1.82 * active.sizeScale, cluster.dustColors, {
         projectileId: "scatter",
         result: cluster,
         powerScale: 0.58 * active.powerScale,
@@ -5233,6 +5423,7 @@ function installDebugApi(game: Game): void {
     getRenderStats: () => game.getRenderStats(),
     getPerfReport: () => perfMonitor.report(),
     getRenderWarmupState: () => game.getRenderWarmupState(),
+    getCannonVisualState: () => game.getCannonVisualState(),
     setPerfEnabled: (enabled) => perfMonitor.setEnabled(enabled),
     clearPerfReport: () => perfMonitor.clear(),
     flushPerfLog: (reason) => game.flushPerfLog(reason),
@@ -5273,6 +5464,9 @@ function explosionFocusScore(result: ExplosionResult): number {
 function hazardCameraFocusBonus(object: ExplosionAffectedObject): number {
   const label = object.label.toLowerCase();
   const zone = object.zoneId ?? "";
+  if (isNuclearReactorHazard(label, zone)) {
+    return 260;
+  }
   if (isPropaneDepotHazard(label, zone)) {
     return 185;
   }
@@ -5287,6 +5481,9 @@ function hazardCameraFocusBonus(object: ExplosionAffectedObject): number {
   }
   if (isParkingSiloHazard(label, zone)) {
     return 145;
+  }
+  if (isElevatedMetroHazard(label, zone)) {
+    return 130;
   }
   if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
     return 135;
@@ -5363,100 +5560,168 @@ function isChainTarget(object: PhysicsObject): boolean {
 function isVolatileHazard(object: ExplosionAffectedObject): boolean {
   const label = object.label.toLowerCase();
   const zone = object.zoneId ?? "";
-  return (
-    zone.includes("hazard-relay") ||
-    zone.includes("power-grid") ||
-    zone.includes("energy-plant") ||
-    zone.includes("gas-station") ||
-    zone.includes("propane-depot") ||
-    zone.includes("electric-substation") ||
-    zone.includes("parking-silo") ||
-    zone.includes("parking-garage") ||
-    zone.includes("fuel") ||
-    zone.includes("gas") ||
-    zone.includes("moving-vehicles") ||
-    label.includes("shock canister") ||
-    label.includes("power-grid") ||
-    label.includes("substation") ||
-    label.includes("propane") ||
-    label.includes("parking silo") ||
-    label.includes("parking garage") ||
-    label.includes("energy plant") ||
-    label.includes("gas pump") ||
-    label.includes("gas station")
-  );
+  return isIdentifiableExplosiveHazard(label, zone);
 }
 
 function volatileHazardProfile(object: ExplosionAffectedObject): VolatileHazardProfile {
   const label = object.label.toLowerCase();
   const zone = object.zoneId ?? "";
+  if (isNuclearReactorHazard(label, zone)) {
+    return volatileProfileWithObjectScale(
+      {
+        strength: 58,
+        radius: 5.8,
+        heatRadius: 5.4,
+        projectileId: "ignite",
+        color: 0xffd15c,
+        powerScale: 2.05,
+        sizeScale: 1.85,
+        densityScale: 0.9,
+        delayScale: 0.22,
+        maxSpreadCount: 2,
+        mushroomCloud: true
+      },
+      object
+    );
+  }
   if (isPropaneDepotHazard(label, zone)) {
-    return {
+    return volatileProfileWithObjectScale({
       strength: 36,
       radius: 3.65,
+      heatRadius: 3.5,
       projectileId: "ignite",
       color: 0xff8f38,
       powerScale: 1.18,
-      sizeScale: 1.16
-    };
+      sizeScale: 1.16,
+      densityScale: 0.72,
+      delayScale: 0.42,
+      maxSpreadCount: 2
+    }, object);
   }
   if (isGasHazard(label, zone)) {
-    return {
+    return volatileProfileWithObjectScale({
       strength: 32,
       radius: 3.35,
+      heatRadius: 3.35,
       projectileId: "ignite",
       color: 0xff7a35,
       powerScale: 1.08,
-      sizeScale: 1.08
-    };
+      sizeScale: 1.08,
+      densityScale: 0.68,
+      delayScale: 0.46,
+      maxSpreadCount: 2
+    }, object);
   }
   if (isEnergyPlantHazard(label, zone)) {
-    return {
+    return volatileProfileWithObjectScale({
       strength: 28,
       radius: 3.05,
+      heatRadius: 2.9,
       projectileId: "pulse",
       color: 0x8ff7ff,
       powerScale: 1.0,
-      sizeScale: 1.0
-    };
+      sizeScale: 1.0,
+      densityScale: 0.66,
+      delayScale: 0.58,
+      maxSpreadCount: 1
+    }, object);
   }
   if (isElectricSubstationHazard(label, zone)) {
-    return {
+    return volatileProfileWithObjectScale({
       strength: 27,
       radius: 3.1,
+      heatRadius: 2.75,
       projectileId: "pulse",
       color: 0x93f6ff,
       powerScale: 0.98,
-      sizeScale: 0.94
-    };
+      sizeScale: 0.94,
+      densityScale: 0.64,
+      delayScale: 0.62,
+      maxSpreadCount: 1
+    }, object);
   }
   if (isParkingSiloHazard(label, zone)) {
-    return {
+    return volatileProfileWithObjectScale({
       strength: 24,
       radius: 2.8,
+      heatRadius: 3.0,
       projectileId: "ignite",
       color: 0xffc241,
       powerScale: 0.92,
-      sizeScale: 0.9
-    };
+      sizeScale: 0.9,
+      densityScale: 0.62,
+      delayScale: 0.66,
+      maxSpreadCount: 2
+    }, object);
+  }
+  if (isElevatedMetroHazard(label, zone)) {
+    const trainCar = isElevatedMetroTrainHazard(label, zone);
+    return volatileProfileWithObjectScale({
+      strength: trainCar ? 26 : 22,
+      radius: trainCar ? 2.85 : 2.45,
+      heatRadius: trainCar ? 2.8 : 2.35,
+      projectileId: "pulse",
+      color: 0x9bf8ff,
+      powerScale: trainCar ? 1.02 : 0.9,
+      sizeScale: trainCar ? 0.98 : 0.84,
+      densityScale: trainCar ? 0.64 : 0.56,
+      delayScale: trainCar ? 0.64 : 0.7,
+      maxSpreadCount: 1
+    }, object);
   }
   if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
-    return {
+    return volatileProfileWithObjectScale({
       strength: 21,
       radius: 2.35,
+      heatRadius: 2.45,
       projectileId: "pulse",
       color: 0x8ff7ff,
       powerScale: 0.84,
-      sizeScale: 0.8
-    };
+      sizeScale: 0.8,
+      densityScale: 0.58,
+      delayScale: 0.72,
+      maxSpreadCount: 1
+    }, object);
   }
-  return {
+  if (isVehicleExplosionHazard(label, zone)) {
+    const largeVehicle = isLargeVehicleHazard(label);
+    return volatileProfileWithObjectScale({
+      strength: largeVehicle ? 21 : 16,
+      radius: largeVehicle ? 2.38 : 1.92,
+      heatRadius: largeVehicle ? 2.55 : 2.05,
+      projectileId: "ignite",
+      color: 0xff8f38,
+      powerScale: largeVehicle ? 0.88 : 0.72,
+      sizeScale: largeVehicle ? 0.82 : 0.68,
+      densityScale: 0.52,
+      delayScale: largeVehicle ? 0.76 : 0.82,
+      maxSpreadCount: 1
+    }, object);
+  }
+  return volatileProfileWithObjectScale({
     strength: 18,
     radius: 2.55,
+    heatRadius: 2.5,
     projectileId: "scatter",
     color: 0xff4f66,
     powerScale: 0.84,
-    sizeScale: 0.8
+    sizeScale: 0.8,
+    densityScale: 0.58,
+    delayScale: 0.74,
+    maxSpreadCount: 1
+  }, object);
+}
+
+function volatileProfileWithObjectScale(profile: VolatileHazardProfile, object: ExplosionAffectedObject): VolatileHazardProfile {
+  const scoreScale = THREE.MathUtils.clamp(Math.sqrt(Math.max(1, object.scoreValue) / 360), 0.82, 1.48);
+  const energyScale = THREE.MathUtils.clamp(Math.sqrt(Math.max(1, object.energy) / Math.max(1, object.scoreValue * 0.65)), 0.86, 1.38);
+  return {
+    ...profile,
+    strength: profile.strength * THREE.MathUtils.lerp(0.92, scoreScale, 0.48) * THREE.MathUtils.lerp(0.94, energyScale, 0.34),
+    radius: profile.radius * THREE.MathUtils.lerp(0.92, scoreScale, 0.32),
+    heatRadius: profile.heatRadius * THREE.MathUtils.lerp(0.92, scoreScale, 0.36),
+    powerScale: profile.powerScale * THREE.MathUtils.lerp(0.96, energyScale, 0.28),
+    sizeScale: profile.sizeScale * THREE.MathUtils.lerp(0.96, scoreScale, 0.25)
   };
 }
 
@@ -5467,35 +5732,28 @@ function sortVolatileHazards(a: ExplosionAffectedObject, b: ExplosionAffectedObj
 function volatileHazardPriority(object: ExplosionAffectedObject): number {
   const label = object.label.toLowerCase();
   const zone = object.zoneId ?? "";
+  if (isNuclearReactorHazard(label, zone)) {
+    return 160;
+  }
   if (isPropaneDepotHazard(label, zone)) {
     return 125;
   }
   if (isGasHazard(label, zone)) {
     return 120;
   }
-  if (isEnergyPlantHazard(label, zone)) {
-    return 110;
-  }
-  if (isElectricSubstationHazard(label, zone)) {
-    return 104;
-  }
-  if (isParkingSiloHazard(label, zone)) {
-    return 92;
-  }
-  if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
-    return 86;
+  if (isElevatedMetroHazard(label, zone)) {
+    return isElevatedMetroTrainHazard(label, zone) ? 68 : 58;
   }
   if (zone.includes("hazard-relay") || label.includes("shock canister") || label.includes("canister")) {
     return 76;
   }
-  if (zone.includes("moving-vehicles")) {
+  if (label.includes("tanker")) {
     return 62;
   }
+  if (isVehicleExplosionHazard(label, zone)) {
+    return isLargeVehicleHazard(label) ? 52 : 44;
+  }
   return 40;
-}
-
-function hazardExplosionLabel(object: ExplosionAffectedObject): string {
-  return `${hazardSourceLabel(object)} BLAST`;
 }
 
 function ignitionExplosionLabel(object: ExplosionAffectedObject): string {
@@ -5503,8 +5761,14 @@ function ignitionExplosionLabel(object: ExplosionAffectedObject): string {
 }
 
 function ignitionWarningColor(hazard: BurningHazard): THREE.ColorRepresentation {
+  if (hazard.mushroomCloud || hazard.label.includes("NUCLEAR") || hazard.label.includes("REACTOR")) {
+    return 0xffd15c;
+  }
   if (hazard.label.includes("PROPANE") || hazard.label.includes("GAS") || hazard.label.includes("VEHICLE")) {
     return 0xff8f38;
+  }
+  if (hazard.label.includes("METRO") || hazard.label.includes("TRANSIT")) {
+    return 0x9bf8ff;
   }
   if (hazard.label.includes("PARKING")) {
     return 0xffc241;
@@ -5539,34 +5803,43 @@ function groundImpactLabel(object: ExplosionAffectedObject): string {
 function hazardSourceLabel(object: ExplosionAffectedObject): string {
   const label = object.label.toLowerCase();
   const zone = object.zoneId ?? "";
+  if (isNuclearReactorHazard(label, zone)) {
+    return "NUCLEAR PLANT";
+  }
   if (isPropaneDepotHazard(label, zone)) {
     return "PROPANE DEPOT";
   }
   if (isGasHazard(label, zone)) {
     return "GAS LINE";
   }
-  if (isEnergyPlantHazard(label, zone)) {
-    return "ENERGY PLANT";
-  }
-  if (isElectricSubstationHazard(label, zone)) {
-    return "SUBSTATION";
-  }
-  if (isParkingSiloHazard(label, zone)) {
-    return "PARKING SILO";
-  }
-  if (zone.includes("power-grid") || label.includes("transformer") || label.includes("power-grid")) {
-    return "POWER RELAY";
+  if (isElevatedMetroHazard(label, zone)) {
+    return isElevatedMetroTrainHazard(label, zone) ? "METRO CAR" : "METRO LINE";
   }
   if (label.includes("shock canister") || label.includes("canister")) {
     return "CANISTER";
   }
-  if (zone.includes("moving-vehicles") || label.includes("vehicle") || label.includes("van") || label.includes("cart")) {
+  if (isVehicleExplosionHazard(label, zone)) {
     return "VEHICLE";
   }
   if (zone.includes("hazard-relay") || label.includes("relay")) {
     return "HAZARD RELAY";
   }
   return `${scoreMaterialLabel(object.materialId)} HAZARD`;
+}
+
+function isIdentifiableExplosiveHazard(label: string, zone: string): boolean {
+  return (
+    isNuclearReactorHazard(label, zone) ||
+    isPropaneDepotHazard(label, zone) ||
+    isGasHazard(label, zone) ||
+    isElevatedMetroHazard(label, zone) ||
+    isVehicleExplosionHazard(label, zone) ||
+    isExplosiveCanisterHazard(label, zone)
+  );
+}
+
+function isNuclearReactorHazard(label: string, zone: string): boolean {
+  return (zone.includes("nuclear-plant") || label.includes("nuclear plant")) && (zone.includes("reactor") || label.includes("reactor"));
 }
 
 function isEnergyPlantHazard(label: string, zone: string): boolean {
@@ -5586,15 +5859,82 @@ function isPropaneDepotHazard(label: string, zone: string): boolean {
 }
 
 function isGasHazard(label: string, zone: string): boolean {
-  return [label, zone].some(
-    (value) =>
-      value.includes("gas") ||
-      value.includes("fuel") ||
-      value.includes("propane") ||
-      value.includes("pipe") ||
-      value.includes("conduit") ||
-      value.includes("pipeline")
+  return isGasPumpHazard(label, zone) || isGasLineHazard(label, zone) || isFuelTankHazard(label, zone);
+}
+
+function isGasPumpHazard(label: string, zone: string): boolean {
+  return zone.includes("fuel-pump") || label.includes("gas pump") || label.includes("fuel pump");
+}
+
+function isGasLineHazard(label: string, zone: string): boolean {
+  return (
+    label.includes("gas line") ||
+    label.includes("fuel line") ||
+    label.includes("pipeline") ||
+    label.includes("conduit") ||
+    (label.includes("pipe") && (zone.includes("gas") || zone.includes("fuel")))
   );
+}
+
+function isFuelTankHazard(label: string, zone: string): boolean {
+  const fuelZone = zone.includes("fuel") || zone.includes("gas") || zone.includes("propane");
+  return (
+    zone.includes("moving-fuel-tanker") ||
+    label.includes("tanker") ||
+    (fuelZone && (label.includes("tank") || label.includes("fuel depot") || label.includes("fuel rack")))
+  );
+}
+
+function isExplosiveCanisterHazard(label: string, zone: string): boolean {
+  return label.includes("shock canister") || label.includes("canister") || zone.includes("hazard-relay explosive");
+}
+
+function isElevatedMetroHazard(label: string, zone: string): boolean {
+  return zone.includes("elevated-metro") || label.includes("elevated metro");
+}
+
+function isElevatedMetroTrainHazard(label: string, zone: string): boolean {
+  return isElevatedMetroHazard(label, zone) && (label.includes("lead car") || label.includes("middle car") || label.includes("tail car") || label.includes("metro bus"));
+}
+
+function isVehicleExplosionHazard(label: string, zone: string): boolean {
+  if (isElevatedMetroHazard(label, zone)) {
+    return false;
+  }
+  return hasVehicleLabel(label);
+}
+
+function isLargeVehicleHazard(label: string): boolean {
+  return hasAnyLabelToken(label, ["bus", "van", "truck", "tram", "hauler", "shuttle", "microbus", "flatbed", "tanker"]);
+}
+
+function hasVehicleLabel(label: string): boolean {
+  return hasAnyLabelToken(label, [
+    "vehicle",
+    "car",
+    "microbus",
+    "scooter",
+    "shuttle",
+    "truck",
+    "cart",
+    "tram",
+    "hauler",
+    "loader",
+    "taxi",
+    "courier",
+    "coupe",
+    "van",
+    "hatchback",
+    "fastback",
+    "flatbed",
+    "tanker",
+    "pod"
+  ]);
+}
+
+function hasAnyLabelToken(label: string, terms: readonly string[]): boolean {
+  const tokens = label.split(/[^a-z0-9]+/).filter(Boolean);
+  return terms.some((term) => tokens.includes(term));
 }
 
 function scoreMaterialLabel(materialId: ExplosionAffectedObject["materialId"]): string {
@@ -5619,17 +5959,113 @@ function canIgniteObject(object: ExplosionAffectedObject): boolean {
     return false;
   }
   const zone = object.zoneId ?? "";
-  return (
-    object.materialId === "wood" ||
-    object.materialId === "foam" ||
-    object.materialId === "rubber" ||
-    zone.includes("hazard") ||
-    zone.includes("power-grid") ||
-    zone.includes("energy-plant") ||
-    zone.includes("gas-station") ||
-    zone.includes("fuel") ||
-    zone.includes("gas") ||
-    zone.includes("moving-vehicles")
+  return isIdentifiableExplosiveHazard(object.label.toLowerCase(), zone);
+}
+
+function canIgnitePhysicsObject(object: PhysicsObject): boolean {
+  if (object.category !== "structure" || !object.destructible || object.zoneId === "surface") {
+    return false;
+  }
+  const zone = object.zoneId ?? "";
+  return isIdentifiableExplosiveHazard(object.label.toLowerCase(), zone);
+}
+
+function affectedObjectFromPhysics(object: PhysicsObject, position: THREE.Vector3, energy: number): ExplosionAffectedObject {
+  return {
+    id: object.id,
+    label: object.label,
+    materialId: object.materialId,
+    category: object.category,
+    scoreRole: object.scoreRole,
+    zoneId: object.zoneId,
+    position: position.clone(),
+    energy,
+    weightedDamage: Math.round(Math.max(1, object.scoreValue) * 0.18),
+    scoreValue: object.scoreValue,
+    fractured: false
+  };
+}
+
+function fireSpreadPriority(object: PhysicsObject, origin: THREE.Vector3): number {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  const distancePenalty = vectorFromRapier(object.body.translation()).distanceTo(origin) * 9;
+  let priority = object.scoreValue * 0.5;
+  if (isNuclearReactorHazard(label, zone)) {
+    priority += 150;
+  }
+  if (isPropaneDepotHazard(label, zone) || isFuelTankHazard(label, zone)) {
+    priority += 90;
+  }
+  if (isGasPumpHazard(label, zone) || isGasLineHazard(label, zone)) {
+    priority += 72;
+  }
+  if (isElevatedMetroHazard(label, zone)) {
+    priority += 62;
+  }
+  if (isVehicleExplosionHazard(label, zone)) {
+    priority += isLargeVehicleHazard(label) ? 44 : 34;
+  }
+  if (isExplosiveCanisterHazard(label, zone)) {
+    priority += 58;
+  }
+  return priority - distancePenalty;
+}
+
+function ignitionHazardProfile(object: ExplosionAffectedObject, igniteBias: number, energyRatio: number): VolatileHazardProfile {
+  const zone = object.zoneId ?? "";
+  const label = object.label.toLowerCase();
+  if (isElevatedMetroHazard(label, zone)) {
+    return volatileProfileWithObjectScale(
+      {
+        strength: 19,
+        radius: 2.35,
+        heatRadius: 2.3,
+        projectileId: "pulse",
+        color: 0x9bf8ff,
+        powerScale: THREE.MathUtils.clamp(0.72 + igniteBias * 0.24 + energyRatio * 0.04, 0.72, 1.05),
+        sizeScale: THREE.MathUtils.clamp(0.72 + igniteBias * 0.2, 0.72, 1.0),
+        densityScale: 0.52,
+        delayScale: igniteBias,
+        maxSpreadCount: 1
+      },
+      object
+    );
+  }
+  if (isVehicleExplosionHazard(label, zone)) {
+    const largeVehicle = isLargeVehicleHazard(label);
+    return volatileProfileWithObjectScale(
+      {
+        strength: largeVehicle ? 18 : 14,
+        radius: largeVehicle ? 2.18 : 1.78,
+        heatRadius: largeVehicle ? 2.3 : 1.95,
+        projectileId: "ignite",
+        color: 0xff8f38,
+        powerScale: THREE.MathUtils.clamp(0.66 + igniteBias * 0.28 + energyRatio * 0.04, 0.68, 1.05),
+        sizeScale: THREE.MathUtils.clamp(0.68 + igniteBias * 0.2, 0.68, 1.0),
+        densityScale: 0.5,
+        delayScale: igniteBias,
+        maxSpreadCount: 1
+      },
+      object
+    );
+  }
+  const radius = zone.includes("power-grid") ? 2.15 : object.materialId === "foam" ? 2.65 : object.materialId === "rubber" ? 2.55 : 2.35;
+  const strength = object.materialId === "wood" || object.materialId === "foam" || object.materialId === "rubber" ? 18 : zone.includes("energy-plant") ? 20 : 14;
+  return volatileProfileWithObjectScale(
+    {
+      strength,
+      radius,
+      heatRadius: radius * (object.materialId === "foam" || object.materialId === "rubber" ? 1.18 : 1.02),
+      projectileId: zone.includes("power-grid") || zone.includes("energy-plant") ? "pulse" : "ignite",
+      color: zone.includes("power-grid") || zone.includes("energy-plant") ? 0x8ff7ff : 0xff8f38,
+      powerScale: THREE.MathUtils.clamp(0.68 + igniteBias * 0.34 + energyRatio * 0.04, 0.72, 1.18),
+      sizeScale: THREE.MathUtils.clamp(0.74 + igniteBias * 0.24, 0.76, 1.12),
+      densityScale: 0.58,
+      delayScale: igniteBias,
+      maxSpreadCount: object.materialId === "foam" || object.materialId === "rubber" || zone.includes("gas") || zone.includes("fuel") ? 2 : 1
+    },
+    object
   );
 }
 
@@ -5672,11 +6108,18 @@ function isBrittlePenetrationMaterial(materialId: MaterialId): boolean {
 }
 
 function heavyPenetrationSpeed(active: ActiveProjectile, target: PhysicsObject, measuredSpeed: number): number {
-  if (active.definition.id !== "gravity" || !isBrittlePenetrationMaterial(target.materialId)) {
+  if (active.definition.id !== "gravity") {
     return measuredSpeed;
   }
   const launchSpeed = active.definition.speed * active.powerScale;
-  const floorScale = target.materialId === "glass" || target.materialId === "foam" ? 0.72 : 0.58;
+  const floorScale =
+    target.materialId === "glass" || target.materialId === "foam"
+      ? 0.82
+      : target.materialId === "wood"
+        ? 0.7
+        : target.materialId === "concrete" || target.materialId === "metal"
+          ? 0.54
+          : 0.62;
   return Math.max(measuredSpeed, launchSpeed * floorScale);
 }
 
@@ -5693,13 +6136,13 @@ function penetrationExitDistance(active: ActiveProjectile, target: PhysicsObject
 function penetrationImpactScale(projectileId: ProjectileId, target: PhysicsObject): number {
   if (projectileId === "gravity") {
     if (target.materialId === "concrete" || target.materialId === "metal") {
-      return 0.94;
+      return 1.08;
     }
     if (target.materialId === "wood") {
-      return 0.78;
+      return 0.9;
     }
     if (target.materialId === "glass" || target.materialId === "foam") {
-      return 0.72;
+      return 0.82;
     }
   }
   return 0.18;
@@ -5708,13 +6151,13 @@ function penetrationImpactScale(projectileId: ProjectileId, target: PhysicsObjec
 function penetrationRetainedSpeed(projectileId: ProjectileId, target: PhysicsObject): number {
   if (projectileId === "gravity") {
     if (target.materialId === "concrete" || target.materialId === "metal") {
-      return 0.58;
+      return 0.66;
     }
     if (target.materialId === "wood") {
-      return 0.68;
+      return 0.76;
     }
     if (target.materialId === "glass" || target.materialId === "foam") {
-      return 0.9;
+      return 0.94;
     }
   }
   return 0.42;
@@ -5723,28 +6166,81 @@ function penetrationRetainedSpeed(projectileId: ProjectileId, target: PhysicsObj
 function directImpactScale(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "slug":
-      return 0.82;
+      return 0.94;
     case "gravity":
-      return 1.28;
+      return 1.44;
     case "pulse":
       return 0.52;
     case "scatter":
-      return 0.42;
+      return 0.54;
     case "ignite":
       return 0.74;
   }
 }
 
+function impactBlastProfile(
+  projectile: ProjectileDefinition,
+  hitObject: PhysicsObject | null,
+  powerScale: number,
+  sizeScale: number,
+  sourceSpeed: number,
+  materials: MaterialCatalog
+): ImpactBlastProfile {
+  const residualStrength = residualBlastScale(projectile.id);
+  const residualRadius = residualBlastRadiusScale(projectile.id);
+  const baseStrength = projectile.impulse * powerScale * projectile.fractureBoost * residualStrength;
+  const baseRadius = projectile.blastRadius * sizeScale * residualRadius;
+  const baseVisualRadius = projectile.blastRadius * sizeScale * impactVisualRadiusScale(projectile.id);
+  if (!hitObject || residualStrength <= 0 || residualRadius <= 0) {
+    return {
+      strength: baseStrength,
+      radius: baseRadius,
+      visualRadius: baseVisualRadius,
+      audioPowerScale: powerScale,
+      vfxPowerScale: powerScale,
+      sizeScale,
+      ignitionBias: projectile.id === "ignite" ? 1.35 : projectile.id === "pulse" ? 0.35 : 0
+    };
+  }
+
+  const material = materials.get(hitObject.materialId);
+  const volume = Math.max(0.08, hitObject.dimensions.x * hitObject.dimensions.y * hitObject.dimensions.z);
+  const massScore = volume * Math.max(0.6, material.massFactor) * Math.max(0.6, hitObject.fractureResistance ?? 1);
+  const massScale = THREE.MathUtils.clamp(0.82 + Math.log1p(massScore) * 0.16 + hitObject.scoreValue / 2800, 0.86, 1.58);
+  const speedScale = THREE.MathUtils.clamp(sourceSpeed / Math.max(1, projectile.speed * powerScale), 0.78, 1.32);
+  const targetRoleScale = hitObject.scoreRole === "target" ? 1.08 : 1;
+  const strengthScale = massScale * THREE.MathUtils.lerp(0.9, speedScale, 0.42) * targetRoleScale;
+  const radiusScale = THREE.MathUtils.clamp(0.88 + (massScale - 1) * 0.5 + (sizeScale - 1) * 0.12, 0.82, 1.36);
+  const ignitionBias =
+    projectile.id === "ignite"
+      ? THREE.MathUtils.clamp(1.08 + (massScale - 1) * 0.42, 1.05, 1.65)
+      : projectile.id === "pulse"
+        ? 0.35
+        : canIgnitePhysicsObject(hitObject)
+          ? THREE.MathUtils.clamp(0.16 + (massScale - 1) * 0.34, 0.12, 0.58)
+          : 0;
+
+  return {
+    strength: baseStrength * strengthScale,
+    radius: baseRadius * radiusScale,
+    visualRadius: baseVisualRadius * THREE.MathUtils.clamp(0.9 + (strengthScale - 1) * 0.22 + (radiusScale - 1) * 0.42, 0.88, 1.42),
+    audioPowerScale: powerScale * THREE.MathUtils.clamp(0.9 + (strengthScale - 1) * 0.22, 0.88, 1.34),
+    vfxPowerScale: powerScale * THREE.MathUtils.clamp(0.92 + (strengthScale - 1) * 0.28, 0.9, 1.42),
+    sizeScale: sizeScale * THREE.MathUtils.clamp(radiusScale, 0.86, 1.34),
+    ignitionBias
+  };
+}
+
 function residualBlastScale(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "slug":
-      return 0.72;
+      return 0.82;
     case "gravity":
       return 0;
     case "pulse":
       return 0.38;
     case "scatter":
-      return 0.34;
+      return 0.46;
     case "ignite":
       return 0.78;
   }
@@ -5753,13 +6249,13 @@ function residualBlastScale(projectileId: ProjectileId): number {
 function residualBlastRadiusScale(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "slug":
-      return 0.92;
+      return 1;
     case "gravity":
       return 0;
     case "pulse":
       return 1.2;
     case "scatter":
-      return 0.64;
+      return 0.74;
     case "ignite":
       return 0.86;
   }
@@ -5768,13 +6264,13 @@ function residualBlastRadiusScale(projectileId: ProjectileId): number {
 function impactVisualRadiusScale(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "slug":
-      return 1.42;
+      return 1.5;
     case "gravity":
       return 1.36;
     case "pulse":
       return 1.68;
     case "scatter":
-      return 1.32;
+      return 1.46;
     case "ignite":
       return 1.42;
   }
@@ -6050,50 +6546,50 @@ function graphicsLightingProfile(quality: GraphicsQuality): GraphicsLightingProf
   switch (quality) {
     case "performance":
       return {
-        background: 0xa8dcff,
-        fog: 0xd9eef2,
+        background: 0x9bd2f1,
+        fog: 0xcfe5e8,
         fogNear: 66,
         fogFar: 148,
-        exposure: 1.12,
-        ambientSky: 0xc9efff,
-        ambientGround: 0xe2c287,
-        ambientIntensity: 0.84,
-        sunColor: 0xffedac,
-        sunIntensity: 3.15,
-        skyFillColor: 0x9fdbff,
-        skyFillIntensity: 0.24,
+        exposure: 1.02,
+        ambientSky: 0xb8e4f2,
+        ambientGround: 0xb99664,
+        ambientIntensity: 0.68,
+        sunColor: 0xffdf9a,
+        sunIntensity: 2.65,
+        skyFillColor: 0x82c6e8,
+        skyFillIntensity: 0.16,
         shadowMapSize: 1536
       };
     case "balanced":
       return {
-        background: 0xa6d9ff,
-        fog: 0xe6edf0,
-        fogNear: 62,
-        fogFar: 146,
-        exposure: 1.14,
-        ambientSky: 0xc2ecff,
-        ambientGround: 0xdabb86,
-        ambientIntensity: 0.8,
-        sunColor: 0xffe59b,
-        sunIntensity: 3.35,
-        skyFillColor: 0x8fd7ff,
-        skyFillIntensity: 0.28,
+        background: 0x8fc9ec,
+        fog: 0xd4e2df,
+        fogNear: 60,
+        fogFar: 142,
+        exposure: 1.03,
+        ambientSky: 0xa9dced,
+        ambientGround: 0xae8752,
+        ambientIntensity: 0.62,
+        sunColor: 0xffd78f,
+        sunIntensity: 2.85,
+        skyFillColor: 0x74bade,
+        skyFillIntensity: 0.18,
         shadowMapSize: 1536
       };
     case "cinematic":
       return {
-        background: 0x98d2ff,
-        fog: 0xf0e7d7,
-        fogNear: 58,
-        fogFar: 138,
-        exposure: 1.2,
-        ambientSky: 0xb7e7ff,
-        ambientGround: 0xd0a96d,
-        ambientIntensity: 0.72,
-        sunColor: 0xffda88,
-        sunIntensity: 3.85,
-        skyFillColor: 0x83ccff,
-        skyFillIntensity: 0.34,
+        background: 0x77b9e2,
+        fog: 0xd7d7c9,
+        fogNear: 54,
+        fogFar: 132,
+        exposure: 1.06,
+        ambientSky: 0xa9dceb,
+        ambientGround: 0xb1834a,
+        ambientIntensity: 0.58,
+        sunColor: 0xffcc7a,
+        sunIntensity: 3.18,
+        skyFillColor: 0x6fb8dc,
+        skyFillIntensity: 0.17,
         shadowMapSize: 2048
       };
   }
@@ -6108,13 +6604,13 @@ function canvasGradeProfile(quality: GraphicsQuality): CanvasGradeProfile {
       };
     case "balanced":
       return {
-        filter: "contrast(1.04) saturate(1.06)",
+        filter: "contrast(1.035) saturate(1.025)",
         boxShadow: "inset 0 0 72px rgba(5, 13, 18, 0.16)"
       };
     case "cinematic":
       return {
-        filter: "contrast(1.08) saturate(1.12) brightness(1.015)",
-        boxShadow: "inset 0 0 112px rgba(5, 13, 18, 0.24)"
+        filter: "contrast(1.075) saturate(1.055)",
+        boxShadow: "inset 0 0 108px rgba(5, 13, 18, 0.22)"
       };
   }
 }

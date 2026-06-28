@@ -6,6 +6,7 @@ import type { ScoreRole } from "./physics";
 import { decalAtlasTile, materialAtlasTile } from "./visualAssets";
 
 export type BuildingVisualStyle = "industrial" | "glassTower" | "civic" | "utility" | "apartment" | "warehouse" | "market";
+export type BuildingBrand = "pear" | "cloudnine" | "hexxon" | "omnitech";
 
 interface BuildingCellVisualOptions {
   size: THREE.Vector3;
@@ -16,6 +17,7 @@ interface BuildingCellVisualOptions {
   column: number;
   floors: number;
   columns: number;
+  brand?: BuildingBrand;
 }
 
 export interface FragmentVisualOptions {
@@ -95,7 +97,7 @@ function decorateNeutralBuildingCell(
   options: BuildingCellVisualOptions,
   palette: { facade: THREE.Material; trim: THREE.Material; roof: THREE.Material; sign: THREE.Material }
 ): void {
-  const isGround = options.floor === 0;
+  const isGround = options.floor <= 1;
   const isTop = options.floor >= options.floors - 1;
   const isEdgeColumn = options.column === 0 || options.column === options.columns - 1;
   const isFeatureBand = (options.floor + options.column) % 4 === 0;
@@ -106,6 +108,12 @@ function decorateNeutralBuildingCell(
   }
   if (isGround && (options.column % 2 === 0 || isEdgeColumn)) {
     addNeutralStorefront(mesh, options.size, palette.sign, options.style);
+  }
+  if (options.brand && (isGround || isTop) && options.column === 0) {
+    addFauxBrandSign(mesh, options.size, options.brand, isTop ? "crown" : "storefront");
+  }
+  if (options.brand && options.column === 0 && isTop) {
+    addFacadeDepthBreaks(mesh, options, palette.trim);
   }
   if (isTop) {
     addNeutralRoofDetail(mesh, options.size, palette.roof);
@@ -449,6 +457,11 @@ export function decorateStrategicHazard(mesh: THREE.Mesh, options: StrategicHaza
     mergeOpaqueDecorativeChildrenByMaterial(mesh);
     return;
   }
+  if (label.includes("gas line") || label.includes("fuel line") || label.includes("conduit")) {
+    decorateGasLineConduit(mesh, options.size);
+    mergeOpaqueDecorativeChildrenByMaterial(mesh);
+    return;
+  }
   if (label.includes("gas pump")) {
     decorateGasPump(mesh, options.size);
     mergeOpaqueDecorativeChildrenByMaterial(mesh);
@@ -466,6 +479,11 @@ export function decorateStrategicHazard(mesh: THREE.Mesh, options: StrategicHaza
   }
   if (label.includes("parking silo")) {
     decorateParkingSilo(mesh, options.size, label);
+    mergeOpaqueDecorativeChildrenByMaterial(mesh);
+    return;
+  }
+  if (label.includes("nuclear plant") || label.includes("reactor") || label.includes("cooling tower")) {
+    decorateNuclearPlant(mesh, options.size, label);
     mergeOpaqueDecorativeChildrenByMaterial(mesh);
     return;
   }
@@ -540,6 +558,22 @@ function decorateGasPump(mesh: THREE.Mesh, size: THREE.Vector3): void {
   addChildBox(mesh, size.x * 1.18, 0.04, size.z * 1.08, "rubber_foot", {
     y: -size.y * 0.48
   });
+}
+
+function decorateGasLineConduit(mesh: THREE.Mesh, size: THREE.Vector3): void {
+  addChildCylinder(mesh, Math.max(0.045, size.z * 0.24), Math.max(0.045, size.z * 0.24), size.x * 1.08, "gas_canopy_white", {
+    y: size.y * 0.08,
+    rotationZ: Math.PI * 0.5
+  });
+  addChildBox(mesh, size.x * 0.92, 0.04, Math.max(0.04, size.z * 0.34), "hazard_red_marker", {
+    y: size.y * 0.34
+  });
+  for (const x of [-0.32, 0.32]) {
+    addChildBox(mesh, 0.045, size.y * 0.72, Math.max(0.045, size.z * 0.34), "gas_nozzle", {
+      x: size.x * x,
+      y: -size.y * 0.06
+    });
+  }
 }
 
 function decorateElectricSubstation(mesh: THREE.Mesh, size: THREE.Vector3, label: string): void {
@@ -668,6 +702,42 @@ function decorateEnergyCore(mesh: THREE.Mesh, size: THREE.Vector3): void {
   addChildBox(mesh, size.x * 0.74, 0.035, 0.03, "electric_marker", {
     y: -size.y * 0.3,
     z: size.z * 0.58
+  });
+}
+
+function decorateNuclearPlant(mesh: THREE.Mesh, size: THREE.Vector3, label: string): void {
+  if (label.includes("cooling tower")) {
+    addChildBox(mesh, size.x * 1.08, 0.045, size.z * 1.08, "nuclear_concrete_rim", {
+      y: size.y * 0.46
+    });
+    addChildBox(mesh, size.x * 0.74, 0.045, size.z * 0.74, "dark_window", {
+      y: -size.y * 0.18
+    });
+    addChildBox(mesh, size.x * 0.76, 0.036, 0.026, "nuclear_warning_green", {
+      y: size.y * 0.18,
+      z: size.z * 0.54
+    });
+    return;
+  }
+
+  addChildBox(mesh, size.x * 1.05, 0.04, size.z * 1.02, "relay_pad_plate", {
+    y: -size.y * 0.46
+  });
+  addChildBox(mesh, size.x * 0.58, size.y * 0.5, 0.026, "relay_shock_glass", {
+    y: size.y * 0.02,
+    z: size.z * 0.56
+  });
+  addChildCylinder(mesh, Math.min(size.x, size.z) * 0.18, Math.min(size.x, size.z) * 0.18, size.y * 0.72, "relay_shock_core", {
+    rotationX: Math.PI * 0.5,
+    z: size.z * 0.1
+  });
+  addChildBox(mesh, size.x * 0.82, 0.035, 0.03, "nuclear_warning_green", {
+    y: size.y * 0.34,
+    z: size.z * 0.58
+  });
+  addChildBox(mesh, size.x * 0.42, 0.045, 0.028, "hazard_red_marker", {
+    y: -size.y * 0.28,
+    z: size.z * 0.59
   });
 }
 
@@ -878,6 +948,9 @@ function addRoofDetail(mesh: THREE.Mesh, options: BuildingCellVisualOptions, roo
 }
 
 function addPremiumFacadeDetails(mesh: THREE.Mesh, options: BuildingCellVisualOptions, signMaterial: THREE.Material): void {
+  if (options.brand && options.column === 0 && (options.floor === 0 || options.floor === options.floors - 1)) {
+    addFauxBrandSign(mesh, options.size, options.brand, options.floor === options.floors - 1 ? "crown" : "storefront");
+  }
   if (options.scoreRole === "target") {
     addChildBox(mesh, options.size.x * 0.52, 0.08, 0.022, material("hazard_chevron"), {
       y: options.size.y * 0.22,
@@ -902,6 +975,109 @@ function addPremiumFacadeDetails(mesh: THREE.Mesh, options: BuildingCellVisualOp
       z: options.size.z * 0.5 + 0.052
     });
   }
+  if (options.brand && options.column === 0) {
+    addFacadeDepthBreaks(mesh, options, signMaterial);
+  }
+}
+
+function addFacadeDepthBreaks(mesh: THREE.Mesh, options: BuildingCellVisualOptions, trimMaterial: THREE.Material): void {
+  const size = options.size;
+  const z = size.z * 0.5 + 0.047;
+  if (options.floors >= 6 && (options.floor % 2 === 1 || options.floor === options.floors - 1)) {
+    addChildBox(mesh, size.x * 0.82, 0.022, 0.018, trimMaterial, {
+      y: -size.y * 0.42,
+      z
+    });
+  }
+  if (options.columns >= 4 && (options.column === 0 || options.column === options.columns - 1)) {
+    addChildBox(mesh, 0.026, size.y * 0.78, 0.018, material("shadow_reveal"), {
+      x: options.column === 0 ? size.x * 0.42 : -size.x * 0.42,
+      y: -size.y * 0.02,
+      z: z + 0.004
+    });
+  }
+  if (options.floor === options.floors - 1 && options.floors >= 6) {
+    addChildBox(mesh, size.x * 0.72, 0.05, size.z * 0.12, material("mechanical_screen"), {
+      y: size.y * 0.5 + 0.12,
+      z: -size.z * 0.2
+    });
+  }
+}
+
+function addFauxBrandSign(mesh: THREE.Mesh, size: THREE.Vector3, brand: BuildingBrand, placement: "storefront" | "crown"): void {
+  const z = size.z * 0.5 + 0.062;
+  const y = placement === "crown" ? size.y * 0.28 : -size.y * 0.3;
+  const panelWidth = placement === "crown" ? size.x * 0.44 : size.x * 0.5;
+  const panelHeight = placement === "crown" ? size.y * 0.16 : size.y * 0.12;
+  addChildBox(mesh, panelWidth, Math.max(0.052, panelHeight), 0.026, material(`${brand}_brand_panel`), { y, z });
+
+  if (brand === "pear") {
+    addChildSphere(mesh, Math.max(0.035, panelHeight * 0.28), "pear_logo_body", {
+      x: -panelWidth * 0.14,
+      y: y + panelHeight * 0.04,
+      z: z + 0.018
+    });
+    addChildSphere(mesh, Math.max(0.028, panelHeight * 0.22), "pear_logo_body", {
+      x: -panelWidth * 0.14,
+      y: y + panelHeight * 0.24,
+      z: z + 0.02
+    });
+    addChildBox(mesh, panelWidth * 0.08, panelHeight * 0.16, 0.018, "pear_logo_leaf", {
+      x: -panelWidth * 0.04,
+      y: y + panelHeight * 0.43,
+      z: z + 0.025,
+      rotationZ: -Math.PI * 0.18
+    });
+    addChildBox(mesh, panelWidth * 0.22, panelHeight * 0.12, 0.018, "pear_logo_text", {
+      x: panelWidth * 0.16,
+      y: y + panelHeight * 0.02,
+      z: z + 0.022
+    });
+    return;
+  }
+
+  if (brand === "cloudnine") {
+    for (const [x, scale] of [[-0.15, 0.22], [0, 0.28], [0.17, 0.2]] as const) {
+      addChildSphere(mesh, Math.max(0.026, panelHeight * scale), "cloudnine_logo", {
+        x: panelWidth * x,
+        y: y + panelHeight * 0.04,
+        z: z + 0.018
+      });
+    }
+    addChildBox(mesh, panelWidth * 0.18, panelHeight * 0.12, 0.018, "cloudnine_logo", {
+      x: panelWidth * 0.24,
+      y: y - panelHeight * 0.16,
+      z: z + 0.02
+    });
+    return;
+  }
+
+  if (brand === "hexxon") {
+    addChildCylinder(mesh, Math.max(0.04, panelHeight * 0.32), Math.max(0.04, panelHeight * 0.32), 0.024, "hexxon_logo", {
+      x: -panelWidth * 0.18,
+      y,
+      z: z + 0.02,
+      rotationX: Math.PI * 0.5,
+      rotationZ: Math.PI * 0.16
+    });
+    addChildBox(mesh, panelWidth * 0.25, panelHeight * 0.12, 0.018, "hexxon_logo_text", {
+      x: panelWidth * 0.14,
+      y,
+      z: z + 0.022
+    });
+    return;
+  }
+
+  addChildBox(mesh, panelWidth * 0.12, panelHeight * 0.58, 0.018, "omnitech_logo", {
+    x: -panelWidth * 0.18,
+    y,
+    z: z + 0.02
+  });
+  addChildBox(mesh, panelWidth * 0.34, panelHeight * 0.1, 0.018, "omnitech_logo_text", {
+    x: panelWidth * 0.12,
+    y,
+    z: z + 0.022
+  });
 }
 
 function addHazardBadge(mesh: THREE.Mesh, size: THREE.Vector3, kind: HazardIndicatorOptions["kind"], z: number): void {
@@ -1311,10 +1487,38 @@ function createMaterial(key: string): THREE.Material {
       return new THREE.MeshStandardMaterial({ color: 0x7ec7d2, roughness: 0.46, metalness: 0.22 });
     case "cool_sign":
       return new THREE.MeshBasicMaterial({ color: 0x74dfff });
+    case "pear_brand_panel":
+      return new THREE.MeshStandardMaterial({ color: 0x11161c, roughness: 0.5, metalness: 0.46, map: materialAtlasTile(10) });
+    case "pear_logo_body":
+      return new THREE.MeshBasicMaterial({ color: 0xf6f0df, transparent: true, opacity: 0.95 });
+    case "pear_logo_leaf":
+      return new THREE.MeshBasicMaterial({ color: 0x9be15d, transparent: true, opacity: 0.92 });
+    case "pear_logo_text":
+      return new THREE.MeshBasicMaterial({ color: 0xd8fbff, transparent: true, opacity: 0.82 });
+    case "cloudnine_brand_panel":
+      return new THREE.MeshStandardMaterial({ color: 0x14283a, roughness: 0.54, metalness: 0.34, map: materialAtlasTile(8) });
+    case "cloudnine_logo":
+      return new THREE.MeshBasicMaterial({ color: 0xbff7ff, transparent: true, opacity: 0.9 });
+    case "hexxon_brand_panel":
+      return new THREE.MeshStandardMaterial({ color: 0x24171a, roughness: 0.62, metalness: 0.28, map: materialAtlasTile(4) });
+    case "hexxon_logo":
+      return new THREE.MeshBasicMaterial({ color: 0xffd15c, transparent: true, opacity: 0.92 });
+    case "hexxon_logo_text":
+      return new THREE.MeshBasicMaterial({ color: 0xff6a24, transparent: true, opacity: 0.86 });
+    case "omnitech_brand_panel":
+      return new THREE.MeshStandardMaterial({ color: 0x161b25, roughness: 0.52, metalness: 0.52, map: materialAtlasTile(1) });
+    case "omnitech_logo":
+      return new THREE.MeshBasicMaterial({ color: 0xb08aff, transparent: true, opacity: 0.9 });
+    case "omnitech_logo_text":
+      return new THREE.MeshBasicMaterial({ color: 0xd8c6ff, transparent: true, opacity: 0.84 });
     case "neutral_facade":
       return new THREE.MeshStandardMaterial({ color: 0x62686d, roughness: 0.82, metalness: 0.02, map: materialAtlasTile(3) });
     case "dark_trim":
       return new THREE.MeshStandardMaterial({ color: 0x262f36, roughness: 0.58, metalness: 0.16, map: materialAtlasTile(1) });
+    case "shadow_reveal":
+      return new THREE.MeshBasicMaterial({ color: 0x070b0f, transparent: true, opacity: 0.5 });
+    case "mechanical_screen":
+      return new THREE.MeshStandardMaterial({ color: 0x29323a, roughness: 0.62, metalness: 0.36, map: materialAtlasTile(10) });
     case "dark_roof":
       return new THREE.MeshStandardMaterial({ color: 0x20272d, roughness: 0.84, metalness: 0.05, map: materialAtlasTile(12) });
     case "warm_roof":
@@ -1403,6 +1607,14 @@ function createMaterial(key: string): THREE.Material {
       return new THREE.MeshBasicMaterial({ color: 0xc7fbff, transparent: true, opacity: 0.9 });
     case "capacitor_copper":
       return new THREE.MeshStandardMaterial({ color: 0xbd7841, roughness: 0.36, metalness: 0.78, map: materialAtlasTile(10) });
+    case "nuclear_concrete_rim":
+      return new THREE.MeshStandardMaterial({ color: 0xd0cec2, roughness: 0.9, metalness: 0.02, map: materialAtlasTile(15) });
+    case "nuclear_warning_green":
+      return new THREE.MeshBasicMaterial({ color: 0xb9ff8a, transparent: true, opacity: 0.94 });
+    case "reactor_glass":
+      return new THREE.MeshPhysicalMaterial({ color: 0x9effd2, transparent: true, opacity: 0.46, roughness: 0.14, metalness: 0, depthWrite: false, envMapIntensity: 1.08 });
+    case "reactor_core":
+      return new THREE.MeshBasicMaterial({ color: 0xdfff80, transparent: true, opacity: 0.88 });
     default:
       return new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0 });
   }

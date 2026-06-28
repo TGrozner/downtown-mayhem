@@ -106,6 +106,7 @@ export interface ExplosionFxContext {
   hitMaterialId?: MaterialId;
   impactDirection?: THREE.Vector3;
   role?: "primary" | "secondary" | "ignition";
+  variant?: "mushroom";
 }
 
 interface ExplosionProfile {
@@ -562,6 +563,9 @@ export class ParticleSystem {
     this.spawnStreaks(origin, visualRadius, profile.streakColor, Math.round(14 * streakAmount), 0.52);
     this.spawnSmokePuffs(coreOrigin, visualRadius, smokeColor, smokeAmount);
     this.spawnAftermathBloom(origin, visualRadius, dustColor, smokeColor, particleScale);
+    if (context.variant === "mushroom") {
+      this.spawnMushroomCloud(origin, visualRadius, profile, smokeColor, dustColor, impactScale);
+    }
 
     if (profile.fireBias > 0.08 || context.projectileId === "ignite" || context.projectileId === "slug" || context.projectileId === "scatter") {
       this.fireBurst(origin, 1.15 * particleScale + profile.fireBias);
@@ -927,6 +931,83 @@ export class ParticleSystem {
         { delay: THREE.MathUtils.randFloat(0.2, 0.42), fadeIn: THREE.MathUtils.randFloat(0.24, 0.42) }
       );
     }
+  }
+
+  private spawnMushroomCloud(
+    origin: THREE.Vector3,
+    radius: number,
+    profile: ExplosionProfile,
+    smokeColor: THREE.Color,
+    dustColor: THREE.Color,
+    impactScale: number
+  ): void {
+    if (this.quality === "performance") {
+      this.spawnPressureWave(origin, radius * 1.85, profile.hotColor, 0.32, impactScale);
+      return;
+    }
+    const amount = THREE.MathUtils.clamp(impactScale * (this.quality === "cinematic" ? 1.18 : 0.88), 0.72, 2.05);
+    const stemHeight = radius * THREE.MathUtils.clamp(0.78 + amount * 0.12, 0.82, 1.16);
+    this.spawnPressureWave(origin, radius * 2.05, profile.hotColor, 0.36, amount);
+    this.spawnPressureWave(this.offsetOrigin(origin, 0, 0.04, 0), radius * 2.6, smokeColor, 0.18, amount);
+
+    for (let layer = 0; layer < 4; layer += 1) {
+      const y = radius * (0.22 + layer * 0.22);
+      const startSize = radius * (0.18 + layer * 0.035) * amount;
+      const endSize = radius * (0.72 + layer * 0.16) * amount;
+      const drift = this.smokeDrift.set(THREE.MathUtils.randFloatSpread(0.08), 0.22 + layer * 0.08, THREE.MathUtils.randFloatSpread(0.08));
+      this.spawnSprite(
+        this.offsetOrigin(origin, THREE.MathUtils.randFloatSpread(radius * 0.05), y, THREE.MathUtils.randFloatSpread(radius * 0.05)),
+        SMOKE_TEXTURE,
+        layer < 2 ? dustColor : smokeColor,
+        startSize,
+        endSize,
+        THREE.MathUtils.lerp(0.22, 0.14, layer / 3),
+        2.2 + layer * 0.42,
+        0.24,
+        THREE.NormalBlending,
+        1.08,
+        drift,
+        { delay: layer * 0.08, fadeIn: 0.16 }
+      );
+    }
+
+    const capCount = this.quality === "cinematic" ? 7 : 5;
+    for (let i = 0; i < capCount; i += 1) {
+      const angle = (i / capCount) * Math.PI * 2 + THREE.MathUtils.randFloatSpread(0.26);
+      const angleCos = Math.cos(angle);
+      const angleSin = Math.sin(angle);
+      const distance = THREE.MathUtils.randFloat(radius * 0.12, radius * 0.34);
+      const drift = this.smokeDrift.set(angleCos * 0.1, 0.14, angleSin * 0.1);
+      this.spawnSprite(
+        this.offsetOrigin(origin, angleCos * distance, stemHeight, angleSin * distance),
+        SMOKE_TEXTURE,
+        i % 3 === 0 ? dustColor : smokeColor,
+        radius * THREE.MathUtils.randFloat(0.26, 0.42) * amount,
+        radius * THREE.MathUtils.randFloat(1.05, 1.55) * amount,
+        0.2,
+        THREE.MathUtils.randFloat(3.2, 4.8),
+        0.16,
+        THREE.NormalBlending,
+        THREE.MathUtils.randFloat(0.78, 1.4),
+        drift,
+        { delay: 0.22 + Math.random() * 0.28, fadeIn: 0.28 }
+      );
+    }
+
+    this.spawnBurst(this.offsetOrigin(origin, 0, radius * 0.12, 0), Math.round(52 * amount), profile.emberColor, 0.74, 0.045, 18 * amount, 0.82, 0.07, THREE.AdditiveBlending);
+    this.spawnFlipbookSprite(
+      this.offsetOrigin(origin, 0, stemHeight * 0.72, 0),
+      VFX_FLIPBOOK_PROFILES.smoke,
+      radius * 0.58 * amount,
+      radius * 1.8 * amount,
+      0.18,
+      3.4,
+      0.36,
+      THREE.NormalBlending,
+      1.2,
+      this.smokeDrift.set(0, 0.18, 0),
+      { startFrame: 6, frameSpan: 44, color: 0xffffff, delay: 0.18, fadeIn: 0.26 }
+    );
   }
 
   private spawnPressureWave(
@@ -1411,8 +1492,8 @@ export class ParticleSystem {
         this.signatureLiftedDirection.copy(direction);
         this.signatureLiftedDirection.y += 0.2;
         this.signatureLiftedDirection.normalize();
-        this.spawnDirectionalStreaks(origin, this.signatureLiftedDirection, visualRadius * 1.24, 0xffdd8a, Math.round(24 * impactScale), 0.38, 0.68);
-        this.spawnStreaks(origin, visualRadius * 1.28, 0xfff0a8, Math.round(18 * impactScale), 0.36);
+        this.spawnDirectionalStreaks(origin, this.signatureLiftedDirection, visualRadius * 1.55, 0xffdd8a, Math.round(36 * impactScale), 0.52, 0.82);
+        this.spawnStreaks(origin, visualRadius * 1.38, 0xfff0a8, Math.round(28 * impactScale), 0.48);
         this.spawnBurst(origin, Math.round(62 * impactScale), 0xffd26b, 0.48, 0.028, 38 * impactScale, 0.62, 0.03, THREE.AdditiveBlending);
         this.spawnPressureWave(origin, visualRadius * 0.7, 0xffc961, 0.24, impactScale);
         break;
@@ -2531,7 +2612,7 @@ function explosionProfile(projectileId?: ProjectileId, hitMaterialId?: MaterialI
         smokeColor: 0x332a1e,
         streakColor: 0xfff0a8,
         overlayOpacity: 0.48,
-        streakBias: 1.05,
+        streakBias: 1.25,
         fireBias: 0.72,
         smokeBias: 0.26,
         shockBias: 0.26

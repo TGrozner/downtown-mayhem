@@ -120,6 +120,17 @@ export class CameraRig {
     this.shakeMagnitude = 0;
   }
 
+  snapToDesiredView(): void {
+    this.camera.position.sub(this.previousShake);
+    this.previousShake.set(0, 0, 0);
+    this.shakeTime = 0;
+    this.shakeDuration = 0;
+    this.shakeMagnitude = 0;
+    this.camera.position.copy(this.desiredPosition);
+    this.currentTarget.copy(this.desiredTarget);
+    this.camera.lookAt(this.currentTarget);
+  }
+
   update(deltaSeconds: number): void {
     this.camera.position.sub(this.previousShake);
     this.previousShake.set(0, 0, 0);

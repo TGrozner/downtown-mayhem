@@ -854,6 +854,14 @@ export class PhysicsWorld {
     };
   }
 
+  getPendingCollisionBacklogCount(): number {
+    return this.pendingCollisionEvents.length - this.pendingCollisionEventHead;
+  }
+
+  getPendingSurfaceCollisionBacklogCount(): number {
+    return this.pendingSurfaceCollisionEvents.length - this.pendingSurfaceCollisionEventHead;
+  }
+
   batchStaticDetails(): void {
     const startedAt = perfMonitor.timeStart();
     let batchedObjects = 0;

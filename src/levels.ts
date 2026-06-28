@@ -7,6 +7,7 @@ import {
   decorateStrategicHazard,
   decorateStreetCargo,
   decorateTrafficBarricade,
+  type BuildingBrand,
   type BuildingVisualStyle
 } from "./cityVisuals";
 import { MaterialCatalog, type MaterialId } from "./materialCatalog";
@@ -162,6 +163,7 @@ interface BuildingSpec {
   style: BuildingVisualStyle;
   stagger?: number;
   rotationY?: number;
+  brand?: BuildingBrand;
 }
 
 interface CityRoadCorridor {
@@ -1260,6 +1262,7 @@ function spawnCascadeHighRiseCorridors(context: LevelContext): void {
       zoneId: "hazard-core",
       scoreValue: 86,
       style: "glassTower",
+      brand: "hexxon",
       stagger: -0.04,
       rotationY: -Math.PI * 0.06
     },
@@ -1342,6 +1345,36 @@ function spawnCascadeHighRiseCorridors(context: LevelContext): void {
       zoneId: "east-impact",
       scoreValue: 36,
       style: "glassTower",
+      stagger: -0.04,
+      rotationY: Math.PI * 0.5
+    },
+    {
+      label: "Pear Systems tower",
+      materialId: "glass",
+      position: new THREE.Vector3(8.9, 0, -6.25),
+      size: new THREE.Vector3(0.5, 0.76, 0.5),
+      floors: 9,
+      columns: 4,
+      scoreRole: "neutral",
+      zoneId: "brand-district tech-row",
+      scoreValue: 44,
+      style: "glassTower",
+      brand: "pear",
+      stagger: 0.03,
+      rotationY: -Math.PI * 0.035
+    },
+    {
+      label: "Omnitech headquarters",
+      materialId: "concrete",
+      position: new THREE.Vector3(-8.95, 0, -6.65),
+      size: new THREE.Vector3(0.62, 0.66, 0.6),
+      floors: 9,
+      columns: 4,
+      scoreRole: "neutral",
+      zoneId: "brand-district civic-row",
+      scoreValue: 43,
+      style: "civic",
+      brand: "omnitech",
       stagger: -0.04,
       rotationY: Math.PI * 0.5
     }
@@ -1620,11 +1653,26 @@ function spawnStrategicHazards(context: LevelContext): void {
     materialId: "foam",
     position: new THREE.Vector3(6.15, 0.28, 3.75),
     size: new THREE.Vector3(1.65, 0.56, 0.9),
-    zoneId: "gas-station fuel-line",
+    zoneId: "gas-station canopy",
     scoreValue: 420,
     kind: "combustible",
     rotationY: -Math.PI * 0.04
   });
+  for (const [x, z, rotationY] of [
+    [5.78, 2.74, -Math.PI * 0.02],
+    [6.58, 2.78, Math.PI * 0.03]
+  ] as const) {
+    addStrategicHazardBox(context, {
+      label: "Gas line conduit",
+      materialId: "metal",
+      position: new THREE.Vector3(x, 0.18, z),
+      size: new THREE.Vector3(0.72, 0.24, 0.18),
+      zoneId: "gas-station gas-line",
+      scoreValue: 145,
+      kind: "explosive",
+      rotationY
+    });
+  }
   for (const x of [5.55, 6.15, 6.75]) {
     addStrategicHazardBox(context, {
       label: "Gas pump",
@@ -1639,11 +1687,145 @@ function spawnStrategicHazards(context: LevelContext): void {
 }
 
 function spawnMayhemSpecialSetpieces(context: LevelContext): void {
+  spawnNuclearPlant(context);
+  spawnGoldenEggBoss(context);
   spawnElectricSubstation(context);
   spawnPropaneDepot(context);
   spawnParkingSilo(context);
   spawnElevatedMetro(context);
   spawnCentralSkyneedle(context);
+}
+
+function spawnNuclearPlant(context: LevelContext): void {
+  const base = alignCityObjectToRoadEdges(new THREE.Vector3(-4.92, 0, -7.95), new THREE.Vector3(2.45, 2.25, 1.85), -Math.PI * 0.04);
+  addStrategicHazardBox(context, {
+    label: "Nuclear plant reactor core",
+    materialId: "metal",
+    position: new THREE.Vector3(base.x, 0.78, base.z),
+    size: new THREE.Vector3(1.25, 1.56, 1.02),
+    zoneId: "nuclear-plant energy-plant reactor volatile",
+    scoreValue: 980,
+    kind: "explosive",
+    rotationY: -Math.PI * 0.04
+  });
+  addStrategicHazardBox(context, {
+    label: "Nuclear plant turbine hall",
+    materialId: "concrete",
+    position: new THREE.Vector3(base.x - 1.0, 0.54, base.z + 0.64),
+    size: new THREE.Vector3(1.26, 1.08, 0.78),
+    zoneId: "nuclear-plant turbine-hall power-grid",
+    scoreValue: 520,
+    kind: "electric",
+    rotationY: -Math.PI * 0.04
+  });
+  for (const [offsetX, offsetZ, scale] of [
+    [0.95, -0.58, 1],
+    [1.56, 0.52, 0.82]
+  ] as const) {
+    const tower = context.physics.addDynamicBox({
+      label: "Nuclear plant cooling tower",
+      material: context.materials.get("concrete"),
+      renderMaterial: sharedLevelMaterial(
+        "nuclear-plant-cooling-tower",
+        () => new THREE.MeshStandardMaterial({ color: 0xa8a69b, roughness: 0.92, metalness: 0.02, map: materialAtlasTile(15) })
+      ),
+      position: new THREE.Vector3(base.x + offsetX, 0.58 * scale, base.z + offsetZ),
+      size: new THREE.Vector3(0.58 * scale, 1.16 * scale, 0.58 * scale),
+      category: "structure",
+      scoreRole: "target",
+      zoneId: "nuclear-plant cooling-tower",
+      canFracture: true,
+      destructible: true,
+      bodyType: "fixed",
+      chainSource: true,
+      fractureResistance: 0.92,
+      scoreValue: Math.round(340 * scale)
+    });
+    tower.mesh.userData.disposeMaterial = false;
+    decorateHazardIndicator(tower.mesh, { size: tower.dimensions, kind: "explosive" });
+    decorateStrategicHazard(tower.mesh, { label: tower.label, size: tower.dimensions, kind: "explosive" });
+  }
+}
+
+function spawnGoldenEggBoss(context: LevelContext): void {
+  const material = context.materials.get("metal");
+  const renderMaterial = sharedLevelMaterial(
+    "golden-egg-boss-shell",
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: 0xffc94a,
+        roughness: 0.28,
+        metalness: 0.82,
+        emissive: 0x3a2302,
+        emissiveIntensity: 0.2,
+        map: materialAtlasTile(10),
+        envMapIntensity: 1.45
+      })
+  );
+  const base = alignCityObjectToRoadEdges(new THREE.Vector3(7.95, 0, -8.55), new THREE.Vector3(1.3, 2.2, 1.3), Math.PI * 0.05);
+  const eggMesh = createGoldenEggMesh(renderMaterial);
+  const egg = context.physics.addDynamicBox({
+    label: "Golden egg boss",
+    material,
+    renderMaterial,
+    renderMesh: eggMesh,
+    position: new THREE.Vector3(base.x, 1.08, base.z),
+    size: new THREE.Vector3(1.06, 2.16, 1.06),
+    rotation: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI * 0.05, 0)),
+    category: "structure",
+    scoreRole: "target",
+    zoneId: "golden-egg-boss unique-boss",
+    canFracture: true,
+    destructible: true,
+    bodyType: "fixed",
+    chainSource: true,
+    fractureResistance: 3.8,
+    scoreValue: 24,
+    supportReleaseMassScale: 2.8
+  });
+  egg.mesh.userData.disposeMaterial = false;
+
+  const plinth = context.physics.addDynamicBox({
+    label: "Golden egg boss plinth",
+    material: context.materials.get("concrete"),
+    renderMaterial: sharedLevelMaterial(
+      "golden-egg-boss-plinth",
+      () => new THREE.MeshStandardMaterial({ color: 0x34313a, roughness: 0.78, metalness: 0.18, map: materialAtlasTile(1) })
+    ),
+    position: new THREE.Vector3(base.x, 0.18, base.z),
+    size: new THREE.Vector3(1.55, 0.36, 1.55),
+    category: "structure",
+    scoreRole: "neutral",
+    zoneId: "golden-egg-boss plinth",
+    canFracture: true,
+    destructible: true,
+    bodyType: "fixed",
+    chainSource: true,
+    fractureResistance: 1.6,
+    scoreValue: 26
+  });
+  plinth.mesh.userData.disposeMaterial = false;
+}
+
+function createGoldenEggMesh(renderMaterial: THREE.Material): THREE.Mesh {
+  const geometry = new THREE.SphereGeometry(0.5, 32, 22);
+  geometry.userData.sharedGeometry = false;
+  const mesh = new THREE.Mesh(geometry, renderMaterial);
+  mesh.name = "Golden egg boss";
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.disposeMaterial = false;
+
+  const bandMaterial = sharedLevelMaterial(
+    "golden-egg-boss-band",
+    () => new THREE.MeshBasicMaterial({ color: 0xfff0a8, transparent: true, opacity: 0.88 })
+  );
+  const band = new THREE.Mesh(sharedLevelBoxGeometry(0.88, 0.035, 0.035), bandMaterial);
+  band.name = "golden egg embossed band";
+  band.position.set(0, 0.12, 0.5);
+  band.userData.disposeMaterial = false;
+  mesh.add(band);
+  return mesh;
 }
 
 function spawnElectricSubstation(context: LevelContext): void {
@@ -3232,6 +3414,7 @@ function spawnBuildingStack(context: LevelContext, spec: BuildingSpec): void {
         materialId: spec.materialId,
         scoreRole: spec.scoreRole,
         style: spec.style,
+        brand: spec.brand,
         floor: floor + groupFloors - 1,
         column,
         floors: spec.floors,

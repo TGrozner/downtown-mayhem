@@ -48,12 +48,12 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     materialId: "metal",
     baseRadius: 0.24,
     density: 7.2,
-    speed: 46,
-    impulse: 56,
-    blastRadius: 3.35,
-    fractureBoost: 1.24,
-    scoreModifier: 1.05,
-    description: "Classic orange-white BOOM with a hard shock ring and clean debris shove."
+    speed: 48,
+    impulse: 64,
+    blastRadius: 3.75,
+    fractureBoost: 1.38,
+    scoreModifier: 1.08,
+    description: "Classic orange-white breacher with a harder first hit and clean debris shove."
   },
   scatter: {
     id: "scatter",
@@ -65,12 +65,12 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     materialId: "foam",
     baseRadius: 0.26,
     density: 1.1,
-    speed: 40,
-    impulse: 36,
-    blastRadius: 2.75,
-    fractureBoost: 0.82,
-    scoreModifier: 1.2,
-    description: "Golden fragmentation burst that scatters shard streaks and chained mini-pops."
+    speed: 43,
+    impulse: 44,
+    blastRadius: 3.05,
+    fractureBoost: 0.98,
+    scoreModifier: 1.22,
+    description: "Golden fragmentation burst that throws visible shrapnel and chained mini-pops."
   },
   pulse: {
     id: "pulse",
@@ -97,14 +97,14 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     role: "Purple crush",
     color: new THREE.Color(0x9c71ff),
     materialId: "metal",
-    baseRadius: 0.4,
-    density: 9.5,
-    speed: 32,
-    impulse: 96,
-    blastRadius: 0.8,
-    fractureBoost: 1.35,
-    scoreModifier: 1.22,
-    description: "Dense penetrator that punches through buildings with a violet crush shock."
+    baseRadius: 0.42,
+    density: 10.2,
+    speed: 34,
+    impulse: 108,
+    blastRadius: 0.95,
+    fractureBoost: 1.55,
+    scoreModifier: 1.25,
+    description: "Dense penetrator that punches deeper through towers with a violet crush shock."
   },
   ignite: {
     id: "ignite",

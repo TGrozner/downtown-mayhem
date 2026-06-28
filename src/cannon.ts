@@ -1,12 +1,37 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { ProjectileDefinition } from "./projectile";
 import { materialAtlasTile } from "./visualAssets";
 
 const LAUNCH_MUZZLE_CLEARANCE = 0.58;
+const CANNON_MODEL_PATH = "assets/models/cannon-quaternius/cannon.glb";
+const CANNON_MUZZLE_LOCAL_Y = 0.38;
+const CANNON_MUZZLE_DISTANCE = 0.42;
+// Matches the static "High siege battery" deck: top y=-0.38, front edge z=-0.5 in cannon-local space.
+const CANNON_DECK_TOP_LOCAL_Y = -0.38;
+const CANNON_DECK_FRONT_EDGE_LOCAL_Z = -0.5;
+// Measured from the scaled and normalized Quaternius Turret Cannon GLB contact ring.
+const CANNON_MODEL_CONTACT_MIN_Z = -1.9519;
+const CANNON_MODEL_DECK_CONTACT_MARGIN_Z = 0.04;
+const CANNON_MODEL_OFFSET_Y = CANNON_DECK_TOP_LOCAL_Y;
+const CANNON_MODEL_OFFSET_Z = CANNON_DECK_FRONT_EDGE_LOCAL_Z - CANNON_MODEL_CONTACT_MIN_Z + CANNON_MODEL_DECK_CONTACT_MARGIN_Z;
+const CANNON_MODEL_SCALE = new THREE.Vector3(2.4, 1.75, 3.6);
+const CANNON_MODEL_FORWARD_ROTATION = Math.PI;
+const CANNON_MODEL_MATERIAL_COLORS: Record<string, number> = {
+  Black: 0x20252a,
+  Grey: 0x626c72,
+  LightGrey: 0xa8adb0,
+  Orange: 0xb8793f
+};
+
+export type CannonVisualState = "loading" | "ready" | "fallback";
 
 export class Cannon {
   readonly group = new THREE.Group();
 
+  private readonly fallbackVisuals = new THREE.Group();
+  private readonly barrelShell = new THREE.Group();
+  private readonly modelMount = new THREE.Group();
   private readonly barrelPivot = new THREE.Group();
   private readonly barrel = new THREE.Mesh(
     new THREE.CylinderGeometry(0.24, 0.42, 3.5, 28),
@@ -16,10 +41,6 @@ export class Cannon {
       roughness: 0.34,
       map: materialAtlasTile(0)
     })
-  );
-  private readonly glowRing = new THREE.Mesh(
-    new THREE.TorusGeometry(0.46, 0.035, 8, 36),
-    new THREE.MeshBasicMaterial({ color: 0x8ff7ff, transparent: true, opacity: 0.8 })
   );
   private readonly trajectory: THREE.Line;
   private readonly trajectoryPositions = new Float32Array(48 * 3);
@@ -31,6 +52,7 @@ export class Cannon {
   private charge = 0;
   private trajectoryDirty = true;
   private trajectoryKey = "";
+  private modelLoadState: CannonVisualState = "loading";
   private readonly trajectoryAimPoint = new THREE.Vector3();
   private trajectoryAimPointActive = false;
 
@@ -44,6 +66,7 @@ export class Cannon {
     base.castShadow = true;
     base.receiveShadow = true;
     base.position.y = -0.19;
+    this.fallbackVisuals.add(base);
 
     const yoke = new THREE.Mesh(
       new THREE.BoxGeometry(1.78, 0.62, 0.68),
@@ -51,6 +74,7 @@ export class Cannon {
     );
     yoke.castShadow = true;
     yoke.position.y = 0.42;
+    this.fallbackVisuals.add(yoke);
 
     this.barrel.rotation.x = Math.PI * 0.5;
     this.barrel.position.z = -1.18;
@@ -65,8 +89,6 @@ export class Cannon {
     muzzle.position.z = -3.08;
     muzzle.rotation.x = Math.PI * 0.5;
 
-    this.glowRing.position.z = -2.0;
-    this.glowRing.rotation.x = Math.PI * 0.5;
     const leftRail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.11, 2.35), accentMaterial);
     leftRail.position.set(-0.34, 0.02, -1.32);
     const rightRail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.11, 2.35), accentMaterial);
@@ -75,10 +97,14 @@ export class Cannon {
     rearBand.position.z = -0.28;
     const muzzleBand = new THREE.Mesh(new THREE.TorusGeometry(0.31, 0.026, 8, 32), accentMaterial);
     muzzleBand.position.z = -2.62;
-    this.barrelPivot.add(this.barrel, muzzle, this.glowRing, leftRail, rightRail, rearBand, muzzleBand);
-    this.barrelPivot.position.y = 0.62;
-    this.group.add(base, yoke, this.barrelPivot);
+    this.barrelShell.add(this.barrel, muzzle, leftRail, rightRail, rearBand, muzzleBand);
+    this.barrelPivot.position.y = CANNON_MUZZLE_LOCAL_Y;
+    this.modelMount.position.set(0, CANNON_MODEL_OFFSET_Y, CANNON_MODEL_OFFSET_Z);
+    this.modelMount.visible = false;
+    this.barrelPivot.add(this.barrelShell);
+    this.group.add(this.modelMount, this.fallbackVisuals, this.barrelPivot);
     this.scene.add(this.group);
+    this.loadCannonModel();
 
     const trajectoryGeometry = new THREE.BufferGeometry();
     trajectoryGeometry.setAttribute("position", new THREE.BufferAttribute(this.trajectoryPositions, 3));
@@ -118,16 +144,13 @@ export class Cannon {
   update(deltaSeconds: number, projectile: ProjectileDefinition, powerScale: number, sizeScale: number): void {
     this.recoil = THREE.MathUtils.damp(this.recoil, 0, 9, deltaSeconds);
     this.charge = (this.charge + deltaSeconds * 2.2) % 1;
-    const material = this.glowRing.material as THREE.MeshBasicMaterial;
     const chargePulse = Math.sin(this.charge * Math.PI * 2);
     const pressure = THREE.MathUtils.clamp(0.76 + powerScale * 0.2 + sizeScale * 0.12, 0.85, 1.35);
-    material.color.copy(projectile.color);
-    material.opacity = THREE.MathUtils.clamp(0.54 + pressure * 0.22 + chargePulse * 0.16, 0.42, 0.95);
-    this.glowRing.scale.setScalar(0.88 + pressure * 0.16 + chargePulse * 0.035);
     const trajectoryMaterial = this.trajectory.material as THREE.LineBasicMaterial;
     trajectoryMaterial.color.copy(projectile.color);
     trajectoryMaterial.opacity = THREE.MathUtils.clamp(0.64 + pressure * 0.1 + chargePulse * 0.08, 0.55, 0.9);
     this.barrel.position.z = -1.18 + this.recoil;
+    this.modelMount.position.z = CANNON_MODEL_OFFSET_Z + this.recoil * 0.32;
     const barrelPressure = 1 + (powerScale - 1) * 0.045 + (sizeScale - 1) * 0.035;
     this.barrel.scale.set(1 + (sizeScale - 1) * 0.045, barrelPressure, 1);
     const nextTrajectoryKey = `${projectile.id}:${powerScale.toFixed(3)}:${sizeScale.toFixed(3)}`;
@@ -152,7 +175,7 @@ export class Cannon {
   }
 
   getMuzzlePosition(): THREE.Vector3 {
-    return this.getPivotOrigin().add(this.getDirection().multiplyScalar(3.28));
+    return this.getPivotOrigin().add(this.getDirection().multiplyScalar(CANNON_MUZZLE_DISTANCE));
   }
 
   getLaunchPosition(projectileRadius: number): THREE.Vector3 {
@@ -177,13 +200,52 @@ export class Cannon {
     this.trajectory.visible = visible;
   }
 
+  getVisualState(): CannonVisualState {
+    return this.modelLoadState;
+  }
+
   private updateTransforms(): void {
     this.group.rotation.y = -this.yaw;
     this.barrelPivot.rotation.x = this.pitch;
   }
 
+  private loadCannonModel(): void {
+    const loader = new GLTFLoader();
+    loader.load(
+      assetUrl(CANNON_MODEL_PATH),
+      (gltf) => {
+        const model = gltf.scene;
+        model.name = "Quaternius CC0 turret cannon";
+        model.rotation.y = CANNON_MODEL_FORWARD_ROTATION;
+        model.scale.copy(CANNON_MODEL_SCALE);
+        normalizeModelToDeck(model);
+        model.traverse((object) => {
+          if (!isMesh(object)) {
+            return;
+          }
+          object.castShadow = true;
+          object.receiveShadow = true;
+          object.frustumCulled = false;
+          applyModelMaterialSettings(object.material);
+        });
+        this.modelMount.add(model);
+        this.modelMount.visible = true;
+        this.fallbackVisuals.visible = false;
+        this.barrelShell.visible = false;
+        this.modelLoadState = "ready";
+      },
+      undefined,
+      () => {
+        this.modelMount.visible = false;
+        this.fallbackVisuals.visible = true;
+        this.barrelShell.visible = true;
+        this.modelLoadState = "fallback";
+      }
+    );
+  }
+
   private getPivotOrigin(): THREE.Vector3 {
-    return this.group.position.clone().add(new THREE.Vector3(0, 0.62, 0));
+    return this.group.position.clone().add(new THREE.Vector3(0, CANNON_MUZZLE_LOCAL_Y, 0));
   }
 
   private solveBallisticPitch(directionToTarget: THREE.Vector3, muzzleSpeed?: number): number {
@@ -254,4 +316,40 @@ export class Cannon {
     }
     this.trajectory.geometry.attributes.position.needsUpdate = true;
   }
+}
+
+function normalizeModelToDeck(model: THREE.Object3D): void {
+  model.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(model);
+  const center = new THREE.Vector3();
+  bounds.getCenter(center);
+  model.position.set(-center.x, -bounds.min.y, -center.z);
+}
+
+function isMesh(object: THREE.Object3D): object is THREE.Mesh {
+  return (object as THREE.Mesh).isMesh === true;
+}
+
+function applyModelMaterialSettings(material: THREE.Material | THREE.Material[]): void {
+  const materials = Array.isArray(material) ? material : [material];
+  for (const entry of materials) {
+    if (entry instanceof THREE.MeshStandardMaterial) {
+      const color = CANNON_MODEL_MATERIAL_COLORS[entry.name];
+      if (color !== undefined) {
+        entry.color.setHex(color);
+      }
+      entry.roughness = Math.max(entry.roughness, 0.58);
+      entry.metalness = Math.min(entry.metalness, 0.22);
+      if (entry.map) {
+        entry.map.colorSpace = THREE.SRGBColorSpace;
+        entry.map.anisotropy = 8;
+        entry.map.needsUpdate = true;
+      }
+    }
+  }
+}
+
+function assetUrl(path: string): string {
+  const base = import.meta.env.BASE_URL.endsWith("/") ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+  return `${base}${path}`;
 }

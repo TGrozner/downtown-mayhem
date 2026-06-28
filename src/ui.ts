@@ -715,6 +715,7 @@ function renderScore(state: UIState): string {
       <div><span>Collateral Chaos</span><strong>${formatScoreNumber(score.collateralChaos)}</strong></div>
       <div><span>Chain Score</span><strong>${formatScoreNumber(score.chainReactionBonus)}</strong></div>
       <div><span>Secondary Hits</span><strong>${score.chainReactionCount}${score.maxChainCombo > 1 ? ` / x${score.maxChainCombo}` : ""}</strong></div>
+      ${score.goldenEggDestroyed ? `<div><span>Golden Egg</span><strong>x${score.goldenEggMultiplier.toFixed(2)} +${formatScoreNumber(score.goldenEggBonus)}</strong></div>` : ""}
       <div><span>Motion Bonus</span><strong>${formatScoreNumber(score.remainingDebrisMotion)}</strong></div>
     </div>
     <div class="hud__result-actions">

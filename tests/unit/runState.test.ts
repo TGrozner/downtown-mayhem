@@ -3,7 +3,7 @@ import { ShotRunState } from "../../src/runState";
 import type { ScoreBreakdown } from "../../src/scoring";
 
 describe("ShotRunState", () => {
-  test("waits for settle before the force-score timeout", () => {
+  test("waits for the scene to settle after the minimum reveal delay", () => {
     const runState = new ShotRunState();
     runState.beginFlight();
     runState.beginSpectacle(1_000);
@@ -12,12 +12,13 @@ describe("ShotRunState", () => {
     expect(runState.evaluateScoreReveal(10_000, false)).toBe("waiting");
   });
 
-  test("forces score reveal when motion never settles", () => {
+  test("keeps waiting while motion never settles", () => {
     const runState = new ShotRunState();
     runState.beginFlight();
     runState.beginSpectacle(1_000);
 
-    expect(runState.evaluateScoreReveal(15_000, false)).toBe("ready");
+    expect(runState.evaluateScoreReveal(15_000, false)).toBe("waiting");
+    expect(runState.evaluateScoreReveal(60_000, false)).toBe("waiting");
   });
 
   test("reveals the score only after consecutive settled frames", () => {
@@ -25,11 +26,11 @@ describe("ShotRunState", () => {
     runState.beginFlight();
     runState.beginSpectacle(1_000);
 
-    for (let frame = 0; frame < 17; frame += 1) {
-      expect(runState.evaluateScoreReveal(4_000 + frame, true)).toBe("waiting");
+    for (let frame = 0; frame < 47; frame += 1) {
+      expect(runState.evaluateScoreReveal(4_200 + frame, true)).toBe("waiting");
     }
 
-    expect(runState.evaluateScoreReveal(4_020, true)).toBe("ready");
+    expect(runState.evaluateScoreReveal(4_247, true)).toBe("ready");
   });
 
   test("stops score reveal checks after the score is locked", () => {
@@ -53,6 +54,9 @@ function fakeScore(): ScoreBreakdown {
     chainReactionCount: 0,
     maxChainCombo: 0,
     remainingDebrisMotion: 0,
+    goldenEggDestroyed: false,
+    goldenEggMultiplier: 1,
+    goldenEggBonus: 0,
     totalScore: 0,
     mayhemRating: "TEST"
   };

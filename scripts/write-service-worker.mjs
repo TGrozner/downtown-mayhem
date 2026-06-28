@@ -95,7 +95,7 @@ function shouldPrecache(file) {
   if (path === "sw.js") {
     return false;
   }
-  return [".html", ".js", ".css", ".json", ".wasm", ".webp", ".ogg"].includes(extname(file));
+  return [".html", ".js", ".css", ".json", ".wasm", ".webp", ".ogg", ".glb"].includes(extname(file));
 }
 
 function relativePath(file) {

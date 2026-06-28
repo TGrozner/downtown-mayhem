@@ -32,9 +32,9 @@ const STABLE_VISUAL_CAPTURE_SETTINGS = {
 };
 const HAZARD_JUNCTION_RENDER_BUDGET = {
   drawCalls: 4_550,
-  visibleMeshes: 3_000,
+  visibleMeshes: 3_020,
   visibleMaterials: 340,
-  programs: 30,
+  programs: 32,
   geometries: 1_300,
   textures: 42
 };
@@ -74,6 +74,8 @@ interface RenderWarmupState {
   phase: "idle" | "warming" | "ready" | "failed";
 }
 
+type CannonVisualState = "loading" | "ready" | "fallback";
+
 interface PerfLogPayload {
   href: string;
   reason: string;
@@ -98,6 +100,7 @@ declare global {
       getRenderStats(): RenderStats;
       getPerfReport(): unknown;
       getRenderWarmupState(): RenderWarmupState;
+      getCannonVisualState(): CannonVisualState;
       setPerfEnabled(enabled: boolean): void;
       clearPerfReport(): void;
       flushPerfLog(reason?: string): void;
@@ -259,6 +262,8 @@ test("keeps the initial city render inside draw-call budgets and visually stable
 
   await useStableVisualCapture(page);
   await bootTrial(page, { width: 1024, height: 768 });
+  await waitForRenderWarmupReady(page);
+  await waitForCannonVisualReady(page);
   const stats = await waitForRenderStats(page);
 
   expect(stats.levelName).toBe("Hazard Junction");
@@ -347,7 +352,7 @@ test("selects a projectile, fires, then resets to a ready trial", async ({ page 
   if (RUN_FULL_SIMULATION_SMOKE) {
     const finishRunButton = page.locator("[data-action='finish-run']");
     await expect(finishRunButton).toBeVisible({ timeout: SCORE_REVEAL_TIMEOUT_MS });
-    await expect(page.locator("[data-role='finish-hint']")).toHaveText("Done watching? Press F or Enter, or click Score Now.");
+    await expect(page.locator("[data-role='finish-hint']")).toHaveText("Done watching the run? Press F or Enter, or click Score Now.");
     await expect(page.locator("[data-role='finish-hint']")).toBeVisible();
     await clickUi(finishRunButton);
     await expectFinalScore(page, "Fragmentation Cluster");
@@ -745,6 +750,22 @@ async function waitForRenderStats(page: Page): Promise<RenderStats> {
     }
     return stats;
   });
+}
+
+async function waitForCannonVisualReady(page: Page): Promise<void> {
+  await expect
+    .poll(() => page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getCannonVisualState() ?? "loading"), {
+      timeout: UI_READY_TIMEOUT_MS
+    })
+    .not.toBe("loading");
+}
+
+async function waitForRenderWarmupReady(page: Page): Promise<void> {
+  await expect
+    .poll(() => page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getRenderWarmupState().phase ?? "idle"), {
+      timeout: LEVEL_START_TIMEOUT_MS
+    })
+    .toBe("ready");
 }
 
 async function freezeForCapture(page: Page): Promise<RenderStats> {
