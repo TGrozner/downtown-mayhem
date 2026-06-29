@@ -2743,13 +2743,14 @@ class Game {
       if (!(object instanceof THREE.Mesh) || !object.visible) {
         return;
       }
+      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+      const renderableMaterials = objectMaterials.filter((material) => material.visible);
+      if (renderableMaterials.length === 0) {
+        return;
+      }
       visibleMeshes += 1;
-      if (Array.isArray(object.material)) {
-        for (const material of object.material) {
-          visibleMaterials.add(material);
-        }
-      } else {
-        visibleMaterials.add(object.material);
+      for (const material of renderableMaterials) {
+        visibleMaterials.add(material);
       }
     });
     this.lastRenderStats = {

@@ -95,6 +95,7 @@ export const TEST_CHAMBERS: TestChamber[] = [
       spawnMayhemSpecialSetpieces(context);
       spawnRadioTower(context);
       spawnCentralConstructionCrane(context);
+      spawnConstructionScaffolding(context);
       spawnStreetSetpieces(context);
     }
   },
@@ -2678,6 +2679,696 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
   decorateCranePayload(payload, { size: payloadSize, liftGap: payloadLiftGap });
 }
 
+interface ScaffoldTowerSpec {
+  labelPrefix: string;
+  anchor: THREE.Vector3;
+  rotationY: number;
+  width: number;
+  depth: number;
+  levels: number;
+  bayHeight: number;
+  fallDirection: THREE.Vector3;
+  accent: THREE.ColorRepresentation;
+}
+
+interface ScaffoldSupportOptions {
+  supportGroupId: string;
+  supportReleaseRadius: number;
+  supportReleaseHeight: number;
+  supportReleaseLowerHeight: number;
+  supportReleaseFallDirection: THREE.Vector3;
+}
+
+interface ScaffoldVisualPart {
+  size: THREE.Vector3;
+  position: THREE.Vector3;
+  rotation?: THREE.Euler;
+}
+
+interface ScaffoldLocalBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+interface ScaffoldPlacementFootprint {
+  center: THREE.Vector3;
+  footprint: { x: number; z: number };
+}
+
+const SCAFFOLD_PLACEMENT_CLEARANCE = 0.28;
+const SCAFFOLD_PLACEMENT_BLOCKERS: CityRoadCorridor[] = [
+  cityFootprintBlocker("x", new THREE.Vector3(-5.3, 0, 1), new THREE.Vector3(2.0, 1, 0.64), 0, 0.24),
+  cityFootprintBlocker("x", new THREE.Vector3(-2.95, 0, 3.2), new THREE.Vector3(3.04, 1, 0.7), 0, 0.26),
+  cityFootprintBlocker("x", new THREE.Vector3(5.18, 0, 2.38), new THREE.Vector3(2.74, 1, 0.72), 0, 0.24),
+  cityFootprintBlocker("x", new THREE.Vector3(-1.35, 0, 1.65), new THREE.Vector3(0.78, 1, 0.58), Math.PI * 0.18, 0.24),
+  cityFootprintBlocker("x", new THREE.Vector3(3.85, 0, 3.4), new THREE.Vector3(0.78, 1, 0.58), -Math.PI * 0.08, 0.24),
+  cityFootprintBlocker("x", new THREE.Vector3(5.82, 0, -4.18), new THREE.Vector3(2.8, 1, 2.5), -Math.PI * 0.055, 0.36),
+  cityFootprintBlocker("z", new THREE.Vector3(8.9, 0, -6.25), new THREE.Vector3(2.16, 1, 0.82), -Math.PI * 0.035, 0.28),
+  cityFootprintBlocker("z", new THREE.Vector3(-8.95, 0, -6.65), new THREE.Vector3(0.82, 1, 2.66), Math.PI * 0.5, 0.28),
+  cityFootprintBlocker("x", new THREE.Vector3(15.95, 0, -14), new THREE.Vector3(0.58, 1, 1.54), Math.PI * 0.5, 0.26)
+];
+const SCAFFOLD_ALL_PLACEMENT_BLOCKERS: CityRoadCorridor[] = [...CITY_PLACEMENT_BLOCKERS, ...SCAFFOLD_PLACEMENT_BLOCKERS];
+
+function spawnConstructionScaffolding(context: LevelContext): void {
+  const westScaffold: ScaffoldTowerSpec = {
+    labelPrefix: "West construction scaffold",
+    anchor: new THREE.Vector3(-7.78, 0, 2.88),
+    rotationY: Math.PI * 0.045,
+    width: 2.95,
+    depth: 0.7,
+    levels: 4,
+    bayHeight: 0.82,
+    fallDirection: new THREE.Vector3(0.64, 0, -0.28),
+    accent: 0xffc241
+  };
+  const eastScaffold: ScaffoldTowerSpec = {
+    labelPrefix: "East construction scaffold",
+    anchor: new THREE.Vector3(3.45, 0, 0.74),
+    rotationY: -Math.PI * 0.035,
+    width: 2.9,
+    depth: 0.68,
+    levels: 4,
+    bayHeight: 0.8,
+    fallDirection: new THREE.Vector3(-0.55, 0, -0.34),
+    accent: 0x68e8ff
+  };
+  const pearTowerScaffold: ScaffoldTowerSpec = {
+    labelPrefix: "Pear tower scaffold",
+    anchor: new THREE.Vector3(8.9, 0, -4.0),
+    rotationY: -Math.PI * 0.5,
+    width: 2.15,
+    depth: 0.6,
+    levels: 5,
+    bayHeight: 0.82,
+    fallDirection: new THREE.Vector3(-0.42, 0, 0.58),
+    accent: 0x8ff7ff
+  };
+  const northeastHotelScaffold: ScaffoldTowerSpec = {
+    labelPrefix: "Northeast hotel facade scaffold",
+    anchor: new THREE.Vector3(16.7, 0, -14.0),
+    rotationY: Math.PI * 0.5,
+    width: 2.15,
+    depth: 0.6,
+    levels: 5,
+    bayHeight: 0.82,
+    fallDirection: new THREE.Vector3(0.62, 0, 0.18),
+    accent: 0xffc241
+  };
+
+  const placedWestScaffold = placedScaffoldSpec(westScaffold);
+  const placedEastScaffold = placedScaffoldSpec(eastScaffold);
+
+  addScaffoldTower(context, placedWestScaffold);
+  addScaffoldTower(context, placedEastScaffold);
+  addScaffoldTower(context, placedScaffoldSpec(pearTowerScaffold));
+  addScaffoldTower(context, placedScaffoldSpec(northeastHotelScaffold));
+  addScaffoldSkybridge(context, placedWestScaffold, placedEastScaffold);
+  addScaffoldSupplyPile(context, placedWestScaffold, -0.2);
+  addScaffoldSupplyPile(context, placedEastScaffold, 0.22);
+}
+
+function placedScaffoldSpec(spec: ScaffoldTowerSpec): ScaffoldTowerSpec {
+  let placed = { ...spec, anchor: spec.anchor.clone() };
+  for (let pass = 0; pass < 4; pass += 1) {
+    const { center, footprint } = scaffoldPlacementFootprint(placed);
+    const alignedCenter = alignFootprintToScaffoldBlockers(center, footprint, SCAFFOLD_PLACEMENT_CLEARANCE);
+    const delta = alignedCenter.sub(center);
+    if (delta.lengthSq() < 0.0001) {
+      break;
+    }
+    placed = { ...placed, anchor: placed.anchor.clone().add(delta) };
+  }
+  return placed;
+}
+
+function scaffoldPlacementFootprint(spec: ScaffoldTowerSpec): ScaffoldPlacementFootprint {
+  const localBounds = scaffoldLocalPlacementBounds(spec);
+  const corners = [
+    new THREE.Vector3(localBounds.minX, 0, localBounds.minZ),
+    new THREE.Vector3(localBounds.minX, 0, localBounds.maxZ),
+    new THREE.Vector3(localBounds.maxX, 0, localBounds.minZ),
+    new THREE.Vector3(localBounds.maxX, 0, localBounds.maxZ)
+  ].map((corner) => scaffoldWorldPosition(spec, corner));
+  const minX = Math.min(...corners.map((corner) => corner.x));
+  const maxX = Math.max(...corners.map((corner) => corner.x));
+  const minZ = Math.min(...corners.map((corner) => corner.z));
+  const maxZ = Math.max(...corners.map((corner) => corner.z));
+  return {
+    center: new THREE.Vector3((minX + maxX) * 0.5, 0, (minZ + maxZ) * 0.5),
+    footprint: { x: maxX - minX, z: maxZ - minZ }
+  };
+}
+
+function scaffoldLocalPlacementBounds(spec: ScaffoldTowerSpec): ScaffoldLocalBounds {
+  const totalHeight = spec.levels * spec.bayHeight + 0.42;
+  const bounds: ScaffoldLocalBounds = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(0, 0, 0), new THREE.Vector3(spec.width, 1, spec.depth));
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(0, 0, 0), new THREE.Vector3(spec.width * 0.88, 1, spec.depth * 1.24));
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(0, 0, spec.depth * 0.5 + 0.08), new THREE.Vector3(spec.width * 0.82, 1, 0.055));
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(-spec.width * 0.44, 0, spec.depth * 0.52), new THREE.Vector3(0.34, 1, 0.28));
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(spec.width * 0.42, 0, spec.depth * 0.55), new THREE.Vector3(0.34, 1, 0.28));
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(0.1, 0, -spec.depth * 0.55), new THREE.Vector3(0.34, 1, 0.28));
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(spec.width * 0.58, 0, -spec.depth * 0.08), new THREE.Vector3(0.46, 1, 0.46));
+  includeScaffoldLocalBox(bounds, new THREE.Vector3(-spec.width * 0.46, 0, spec.depth * 0.66), new THREE.Vector3(0.48, 1, 0.42));
+  if (totalHeight > 4) {
+    includeScaffoldLocalBox(bounds, new THREE.Vector3(0, 0, 0), new THREE.Vector3(spec.width * 0.92, 1, spec.depth * 1.12));
+  }
+  return bounds;
+}
+
+function includeScaffoldLocalBox(bounds: ScaffoldLocalBounds, center: THREE.Vector3, size: THREE.Vector3, rotationY = 0): void {
+  const halfX = size.x * 0.5;
+  const halfZ = size.z * 0.5;
+  for (const x of [-halfX, halfX]) {
+    for (const z of [-halfZ, halfZ]) {
+      const point = new THREE.Vector3(x, 0, z).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY).add(center);
+      bounds.minX = Math.min(bounds.minX, point.x);
+      bounds.maxX = Math.max(bounds.maxX, point.x);
+      bounds.minZ = Math.min(bounds.minZ, point.z);
+      bounds.maxZ = Math.max(bounds.maxZ, point.z);
+    }
+  }
+}
+
+function alignScaffoldObjectToPlacementBlockers(position: THREE.Vector3, size: THREE.Vector3, rotationY: number): THREE.Vector3 {
+  const footprint = cityObjectFootprint(size, rotationY);
+  return alignFootprintToScaffoldBlockers(position, footprint, SCAFFOLD_PLACEMENT_CLEARANCE);
+}
+
+function alignFootprintToScaffoldBlockers(position: THREE.Vector3, footprint: { x: number; z: number }, clearance: number): THREE.Vector3 {
+  return alignFootprintToBlockers(position, footprint, SCAFFOLD_ALL_PLACEMENT_BLOCKERS, clearance);
+}
+
+function cityFootprintBlocker(
+  axis: CityRoadCorridor["axis"],
+  position: THREE.Vector3,
+  size: THREE.Vector3,
+  rotationY: number,
+  padding: number
+): CityRoadCorridor {
+  const footprint = cityObjectFootprint(size, rotationY);
+  return {
+    axis,
+    minX: position.x - footprint.x * 0.5 - padding,
+    maxX: position.x + footprint.x * 0.5 + padding,
+    minZ: position.z - footprint.z * 0.5 - padding,
+    maxZ: position.z + footprint.z * 0.5 + padding
+  };
+}
+
+function addScaffoldTower(context: LevelContext, spec: ScaffoldTowerSpec): void {
+  const supportGroupId = `${spec.labelPrefix.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-collapse`;
+  const totalHeight = spec.levels * spec.bayHeight + 0.42;
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, spec.rotationY, 0));
+  const supportOptions: ScaffoldSupportOptions = {
+    supportGroupId,
+    supportReleaseRadius: Math.max(4.2, spec.width * 1.55),
+    supportReleaseHeight: totalHeight + 1.55,
+    supportReleaseLowerHeight: totalHeight + 0.8,
+    supportReleaseFallDirection: spec.fallDirection
+  };
+
+  const frameSize = new THREE.Vector3(spec.width, totalHeight, spec.depth);
+  const frame = addScaffoldPhysicsBox(context, {
+    label: `${spec.labelPrefix} tube frame`,
+    materialId: "metal",
+    renderMaterial: scaffoldShadowMaterial(),
+    position: scaffoldWorldPosition(spec, new THREE.Vector3(0, totalHeight * 0.5, 0)),
+    size: frameSize,
+    rotation,
+    scoreRole: "target",
+    scoreValue: 620,
+    fractureResistance: 1.15,
+    support: supportOptions,
+    supportReleaseMassScale: 0.9,
+    supportReleaseImpulseScale: 1.15,
+    supportReleaseTorqueScale: 1.28,
+    hideCore: true
+  });
+  decorateScaffoldFrame(frame, {
+    width: spec.width,
+    depth: spec.depth,
+    totalHeight,
+    levels: spec.levels,
+    bayHeight: spec.bayHeight,
+    accent: spec.accent
+  });
+
+  for (let level = 1; level <= spec.levels; level += 1) {
+    const deckY = 0.24 + level * spec.bayHeight;
+    addScaffoldPhysicsBox(context, {
+      label: level === spec.levels ? `${spec.labelPrefix} top work deck` : `${spec.labelPrefix} timber work deck`,
+      materialId: "wood",
+      renderMaterial: scaffoldPlankMaterial(),
+      position: scaffoldWorldPosition(spec, new THREE.Vector3(0, deckY, 0)),
+      size: new THREE.Vector3(spec.width * 0.88, 0.09, spec.depth * 1.24),
+      rotation,
+      scoreRole: level >= spec.levels - 1 ? "target" : "neutral",
+      scoreValue: level === spec.levels ? 210 : 130,
+      fractureResistance: 0.62,
+      support: supportOptions,
+      supportReleaseMassScale: 0.62,
+      supportReleaseImpulseScale: 0.9,
+      supportReleaseTorqueScale: 0.72
+    });
+  }
+
+  addScaffoldNetPanel(context, spec, supportOptions, rotation, "front", totalHeight);
+  addScaffoldWeakPoints(context, spec, supportOptions, rotation, totalHeight);
+  addScaffoldHoist(context, spec, supportOptions, rotation, totalHeight);
+  addScaffoldCanisterRack(context, spec, supportOptions, rotation);
+}
+
+function addScaffoldPhysicsBox(
+  context: LevelContext,
+  options: {
+    label: string;
+    materialId: MaterialId;
+    renderMaterial: THREE.Material;
+    position: THREE.Vector3;
+    size: THREE.Vector3;
+    rotation: THREE.Quaternion;
+    scoreRole: ScoreRole;
+    scoreValue: number;
+    fractureResistance: number;
+    support?: ScaffoldSupportOptions;
+    supportReleaseMassScale?: number;
+    supportReleaseImpulseScale?: number;
+    supportReleaseTorqueScale?: number;
+    hideCore?: boolean;
+  }
+): THREE.Mesh {
+  const object = context.physics.addDynamicBox({
+    label: options.label,
+    material: context.materials.get(options.materialId),
+    renderMaterial: options.renderMaterial,
+    position: options.position,
+    size: options.size,
+    rotation: options.rotation,
+    category: "structure",
+    scoreRole: options.scoreRole,
+    zoneId: "construction-scaffold hazard-core",
+    canFracture: true,
+    destructible: true,
+    bodyType: "fixed",
+    chainSource: true,
+    supportGroupId: options.support?.supportGroupId,
+    supportReleaseRadius: options.support?.supportReleaseRadius,
+    supportReleaseHeight: options.support?.supportReleaseHeight,
+    supportReleaseLowerHeight: options.support?.supportReleaseLowerHeight,
+    supportReleaseFallDirection: options.support?.supportReleaseFallDirection,
+    supportReleaseMassScale: options.supportReleaseMassScale,
+    supportReleaseImpulseScale: options.supportReleaseImpulseScale,
+    supportReleaseTorqueScale: options.supportReleaseTorqueScale,
+    fractureResistance: options.fractureResistance,
+    scoreValue: options.scoreValue,
+    restitution: options.materialId === "wood" ? 0.22 : 0.12,
+    linearDamping: 0.18,
+    angularDamping: 0.32
+  });
+  object.mesh.userData.disposeMaterial = false;
+  disableSetpieceShadows(object.mesh);
+  if (options.hideCore) {
+    hideSetpiecePhysicsCore(object.mesh);
+  }
+  return object.mesh;
+}
+
+function addScaffoldNetPanel(
+  context: LevelContext,
+  spec: ScaffoldTowerSpec,
+  support: ScaffoldSupportOptions,
+  rotation: THREE.Quaternion,
+  side: "front" | "back",
+  totalHeight: number
+): void {
+  const localZ = (side === "front" ? 1 : -1) * (spec.depth * 0.5 + 0.08);
+  const y = totalHeight * 0.56;
+  const height = totalHeight * 0.54;
+  addScaffoldPhysicsBox(context, {
+    label: `${spec.labelPrefix} torn safety net`,
+    materialId: "foam",
+    renderMaterial: scaffoldNetMaterial(spec.accent),
+    position: scaffoldWorldPosition(spec, new THREE.Vector3(0, y, localZ)),
+    size: new THREE.Vector3(spec.width * 0.82, height, 0.055),
+    rotation,
+    scoreRole: "neutral",
+    scoreValue: 92,
+    fractureResistance: 0.34,
+    support,
+    supportReleaseMassScale: 0.34,
+    supportReleaseImpulseScale: 0.8,
+    supportReleaseTorqueScale: 0.62
+  });
+}
+
+function addScaffoldWeakPoints(
+  context: LevelContext,
+  spec: ScaffoldTowerSpec,
+  support: ScaffoldSupportOptions,
+  rotation: THREE.Quaternion,
+  totalHeight: number
+): void {
+  const weakPoints = [
+    { label: "base coupler", local: new THREE.Vector3(-spec.width * 0.44, 0.56, spec.depth * 0.52), scoreValue: 180 },
+    { label: "cross brace latch", local: new THREE.Vector3(spec.width * 0.42, totalHeight * 0.48, spec.depth * 0.55), scoreValue: 230 },
+    { label: "top hoist pin", local: new THREE.Vector3(0.1, totalHeight - 0.32, -spec.depth * 0.55), scoreValue: 260 }
+  ] as const;
+
+  for (const weakPoint of weakPoints) {
+    const object = context.physics.addDynamicBox({
+      label: `${spec.labelPrefix} ${weakPoint.label}`,
+      material: context.materials.get("metal"),
+      renderMaterial: scaffoldWeakPointMaterial(),
+      position: scaffoldWorldPosition(spec, weakPoint.local),
+      size: new THREE.Vector3(0.34, 0.22, 0.28),
+      rotation,
+      category: "structure",
+      scoreRole: "target",
+      zoneId: "construction-scaffold hazard-core",
+      supportGroupId: support.supportGroupId,
+      supportReleaseRadius: support.supportReleaseRadius,
+      supportReleaseHeight: support.supportReleaseHeight,
+      supportReleaseLowerHeight: support.supportReleaseLowerHeight,
+      supportReleaseFallDirection: support.supportReleaseFallDirection,
+      supportReleaseImpulseScale: 1.18,
+      supportReleaseTorqueScale: 1.42,
+      supportReleaseMassScale: 0.52,
+      canFracture: true,
+      destructible: true,
+      fractureResistance: 0.16,
+      bodyType: "fixed",
+      chainSource: true,
+      scoreValue: weakPoint.scoreValue,
+      restitution: 0.08
+    });
+    object.mesh.userData.disposeMaterial = false;
+    disableSetpieceShadows(object.mesh);
+    decorateHazardIndicator(object.mesh, { size: object.dimensions, kind: "explosive" });
+  }
+}
+
+function addScaffoldHoist(
+  context: LevelContext,
+  spec: ScaffoldTowerSpec,
+  support: ScaffoldSupportOptions,
+  rotation: THREE.Quaternion,
+  totalHeight: number
+): void {
+  const hoistSize = new THREE.Vector3(0.46, 0.58, 0.46);
+  const localPosition = new THREE.Vector3(spec.width * 0.58, totalHeight - 0.72, -spec.depth * 0.08);
+  addScaffoldPhysicsBox(context, {
+    label: `${spec.labelPrefix} swinging material hoist`,
+    materialId: "metal",
+    renderMaterial: scaffoldHoistMaterial(),
+    position: scaffoldWorldPosition(spec, localPosition),
+    size: hoistSize,
+    rotation,
+    scoreRole: "target",
+    scoreValue: 240,
+    fractureResistance: 0.44,
+    support,
+    supportReleaseMassScale: 2.35,
+    supportReleaseImpulseScale: 0.72,
+    supportReleaseTorqueScale: 0.78
+  });
+}
+
+function addScaffoldCanisterRack(
+  context: LevelContext,
+  spec: ScaffoldTowerSpec,
+  support: ScaffoldSupportOptions,
+  rotation: THREE.Quaternion
+): void {
+  const size = new THREE.Vector3(0.48, 0.74, 0.42);
+  const object = context.physics.addDynamicBox({
+    label: `${spec.labelPrefix} shock canister rack`,
+    material: context.materials.get("glass"),
+    renderMaterial: scaffoldCanisterMaterial(),
+    position: scaffoldWorldPosition(spec, new THREE.Vector3(-spec.width * 0.46, size.y * 0.5, spec.depth * 0.66)),
+    size,
+    rotation,
+    category: "structure",
+    scoreRole: "target",
+    zoneId: "construction-scaffold hazard-relay explosive",
+    supportGroupId: support.supportGroupId,
+    supportReleaseRadius: support.supportReleaseRadius,
+    supportReleaseHeight: support.supportReleaseHeight,
+    supportReleaseLowerHeight: support.supportReleaseLowerHeight,
+    supportReleaseFallDirection: support.supportReleaseFallDirection,
+    supportReleaseMassScale: 0.76,
+    supportReleaseImpulseScale: 0.9,
+    supportReleaseTorqueScale: 0.84,
+    canFracture: true,
+    destructible: true,
+    fractureResistance: 0.22,
+    bodyType: "fixed",
+    chainSource: true,
+    scoreValue: 190,
+    restitution: 0.18
+  });
+  object.mesh.userData.disposeMaterial = false;
+  disableSetpieceShadows(object.mesh);
+  decorateHazardIndicator(object.mesh, { size, kind: "explosive" });
+}
+
+function addScaffoldSkybridge(context: LevelContext, west: ScaffoldTowerSpec, east: ScaffoldTowerSpec): void {
+  const start = scaffoldWorldPosition(west, new THREE.Vector3(west.width * 0.42, west.bayHeight * 3.25, 0));
+  const end = scaffoldWorldPosition(east, new THREE.Vector3(-east.width * 0.42, east.bayHeight * 3.25, 0));
+  const center = start.clone().lerp(end, 0.5);
+  const delta = end.clone().sub(start);
+  const length = Math.max(1, Math.hypot(delta.x, delta.z));
+  const rotationY = Math.atan2(delta.x, delta.z) - Math.PI * 0.5;
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rotationY, 0));
+  const support: ScaffoldSupportOptions = {
+    supportGroupId: "central-scaffold-skybridge-collapse",
+    supportReleaseRadius: length * 0.72,
+    supportReleaseHeight: 2.2,
+    supportReleaseLowerHeight: 1.4,
+    supportReleaseFallDirection: new THREE.Vector3(0, 0, -1)
+  };
+  const deckSize = new THREE.Vector3(length, 0.12, 0.58);
+  addScaffoldPhysicsBox(context, {
+    label: "Construction scaffold overhead plank bridge",
+    materialId: "wood",
+    renderMaterial: scaffoldPlankMaterial(),
+    position: center,
+    size: deckSize,
+    rotation,
+    scoreRole: "target",
+    scoreValue: 280,
+    fractureResistance: 0.46,
+    support,
+    supportReleaseMassScale: 0.72,
+    supportReleaseImpulseScale: 0.78,
+    supportReleaseTorqueScale: 0.92
+  });
+
+  for (const x of [0]) {
+    const latch = context.physics.addDynamicBox({
+      label: "Construction scaffold bridge release latch",
+      material: context.materials.get("metal"),
+      renderMaterial: scaffoldWeakPointMaterial(),
+      position: center.clone().add(new THREE.Vector3(Math.cos(rotationY) * x, 0.11, -Math.sin(rotationY) * x)),
+      size: new THREE.Vector3(0.3, 0.18, 0.34),
+      rotation,
+      category: "structure",
+      scoreRole: "target",
+      zoneId: "construction-scaffold hazard-core",
+      supportGroupId: support.supportGroupId,
+      supportReleaseRadius: support.supportReleaseRadius,
+      supportReleaseHeight: support.supportReleaseHeight,
+      supportReleaseLowerHeight: support.supportReleaseLowerHeight,
+      supportReleaseFallDirection: support.supportReleaseFallDirection,
+      canFracture: true,
+      destructible: true,
+      fractureResistance: 0.14,
+      bodyType: "fixed",
+      chainSource: true,
+      scoreValue: 150
+    });
+    latch.mesh.userData.disposeMaterial = false;
+    disableSetpieceShadows(latch.mesh);
+  }
+}
+
+function addScaffoldSupplyPile(context: LevelContext, spec: ScaffoldTowerSpec, sideOffset: number): void {
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, spec.rotationY + Math.PI * 0.5, 0));
+  const local = new THREE.Vector3(sideOffset * spec.width, 0.18, spec.depth * 1.35);
+  const size = new THREE.Vector3(1.1, 0.36, 0.58);
+  const pile = context.physics.addDynamicBox({
+    label: `${spec.labelPrefix} loose plank bundle`,
+    material: context.materials.get("wood"),
+    renderMaterial: scaffoldPlankMaterial(),
+    position: alignScaffoldObjectToPlacementBlockers(scaffoldWorldPosition(spec, local), size, spec.rotationY + Math.PI * 0.5),
+    size,
+    rotation,
+    category: "structure",
+    scoreRole: "neutral",
+    zoneId: "construction-scaffold",
+    canFracture: true,
+    destructible: true,
+    bodyType: "fixed",
+    chainSource: true,
+    fractureResistance: 0.52,
+    scoreValue: 82,
+    restitution: 0.24
+  });
+  pile.mesh.userData.disposeMaterial = false;
+  disableSetpieceShadows(pile.mesh);
+}
+
+function scaffoldWorldPosition(spec: ScaffoldTowerSpec, local: THREE.Vector3): THREE.Vector3 {
+  const offset = local.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), spec.rotationY);
+  return spec.anchor.clone().add(offset);
+}
+
+function decorateScaffoldFrame(
+  mesh: THREE.Mesh,
+  config: {
+    width: number;
+    depth: number;
+    totalHeight: number;
+    levels: number;
+    bayHeight: number;
+    accent: THREE.ColorRepresentation;
+  }
+): void {
+  const root = setpieceVisualRoot(mesh, "scaffold");
+  const frameParts: ScaffoldVisualPart[] = [];
+  appendScaffoldFrameParts(frameParts, config);
+  const frameVisual = addSetpieceMergedVisualBoxes(root, "construction scaffold galvanized tube cage", frameParts, scaffoldTubeMaterial(), false);
+  if (frameVisual) {
+    disableSetpieceShadows(frameVisual);
+  }
+}
+
+function appendScaffoldFrameParts(
+  parts: ScaffoldVisualPart[],
+  config: {
+    width: number;
+    depth: number;
+    totalHeight: number;
+    levels: number;
+    bayHeight: number;
+  }
+): void {
+  const tube = 0.055;
+  const halfWidth = config.width * 0.5;
+  const halfDepth = config.depth * 0.5;
+  const verticalCenterY = 0;
+  for (const x of [-halfWidth, halfWidth]) {
+    for (const z of [-halfDepth, halfDepth]) {
+      parts.push({
+        size: new THREE.Vector3(tube, config.totalHeight, tube),
+        position: new THREE.Vector3(x, verticalCenterY, z)
+      });
+    }
+  }
+
+  for (let level = 0; level <= config.levels; level += 1) {
+    const y = -config.totalHeight * 0.5 + 0.24 + level * config.bayHeight;
+    for (const z of [-halfDepth, halfDepth]) {
+      parts.push({ size: new THREE.Vector3(config.width + tube, tube, tube), position: new THREE.Vector3(0, y, z) });
+    }
+    for (const x of [-halfWidth, halfWidth]) {
+      parts.push({ size: new THREE.Vector3(tube, tube, config.depth + tube), position: new THREE.Vector3(x, y, 0) });
+    }
+  }
+
+  const faceBraceLength = Math.hypot(config.width, config.bayHeight);
+  const faceBraceAngle = Math.atan2(config.width, config.bayHeight);
+  const sideBraceLength = Math.hypot(config.depth, config.bayHeight);
+  const sideBraceAngle = Math.atan2(config.depth, config.bayHeight);
+  for (let bay = 0; bay < config.levels; bay += 1) {
+    const y = -config.totalHeight * 0.5 + 0.24 + bay * config.bayHeight + config.bayHeight * 0.5;
+    const alternating = bay % 2 === 0 ? 1 : -1;
+    for (const z of [-halfDepth, halfDepth]) {
+      parts.push({
+        size: new THREE.Vector3(tube, faceBraceLength, tube),
+        position: new THREE.Vector3(0, y, z),
+        rotation: new THREE.Euler(0, 0, faceBraceAngle * alternating)
+      });
+    }
+    for (const x of [-halfWidth, halfWidth]) {
+      parts.push({
+        size: new THREE.Vector3(tube, sideBraceLength, tube),
+        position: new THREE.Vector3(x, y, 0),
+        rotation: new THREE.Euler(sideBraceAngle * alternating, 0, 0)
+      });
+    }
+  }
+}
+
+function scaffoldShadowMaterial(): THREE.Material {
+  return sharedLevelMaterial(
+    "construction-scaffold-shadow-core",
+    () => new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.02, depthWrite: false })
+  );
+}
+
+function scaffoldTubeMaterial(): THREE.Material {
+  return sharedLevelMaterial(
+    "construction-scaffold-galvanized-tube",
+    () => new THREE.MeshStandardMaterial({ color: 0xb2bec4, roughness: 0.34, metalness: 0.72, map: materialAtlasTile(10), envMapIntensity: 1.05 })
+  );
+}
+
+function scaffoldPlankMaterial(): THREE.Material {
+  return sharedLevelMaterial(
+    "construction-scaffold-plank",
+    () => new THREE.MeshStandardMaterial({ color: 0xc08a4a, roughness: 0.68, metalness: 0.04, map: materialAtlasTile(4) })
+  );
+}
+
+function scaffoldNetMaterial(accent: THREE.ColorRepresentation): THREE.Material {
+  return sharedLevelMaterial(
+    `construction-scaffold-net:${String(accent)}`,
+    () => new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.36, depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.03 })
+  );
+}
+
+function scaffoldWeakPointMaterial(): THREE.Material {
+  return sharedLevelMaterial(
+    "construction-scaffold-weak-point",
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: 0xff5a38,
+        roughness: 0.28,
+        metalness: 0.52,
+        emissive: 0xff2a12,
+        emissiveIntensity: 0.56,
+        map: materialAtlasTile(10)
+      })
+  );
+}
+
+function scaffoldHoistMaterial(): THREE.Material {
+  return sharedLevelMaterial(
+    "construction-scaffold-hoist",
+    () => new THREE.MeshStandardMaterial({ color: 0x30383c, roughness: 0.42, metalness: 0.76, emissive: 0x2a1304, emissiveIntensity: 0.1, map: materialAtlasTile(10) })
+  );
+}
+
+function scaffoldCanisterMaterial(): THREE.Material {
+  return sharedLevelMaterial(
+    "construction-scaffold-canister",
+    () =>
+      new THREE.MeshPhysicalMaterial({
+        color: 0x9bf8ff,
+        roughness: 0.18,
+        metalness: 0.12,
+        transparent: true,
+        opacity: 0.82,
+        emissive: 0x0d5b66,
+        emissiveIntensity: 0.32,
+        map: materialAtlasTile(8)
+      })
+  );
+}
+
 interface CranePartOptions {
   destructible?: boolean;
   canFracture?: boolean;
@@ -2815,18 +3506,32 @@ function craneYellowMaterial(): THREE.Material {
 }
 
 function hideCranePhysicsCore(mesh: THREE.Mesh): void {
+  hideSetpiecePhysicsCore(mesh);
+}
+
+function hideSetpiecePhysicsCore(mesh: THREE.Mesh): void {
   if (!Array.isArray(mesh.material)) {
     mesh.material.dispose();
   }
-  mesh.material = new THREE.MeshBasicMaterial({
+  const hiddenMaterial = new THREE.MeshBasicMaterial({
     color: 0x000000,
     transparent: true,
     opacity: 0,
     depthWrite: false
   });
+  hiddenMaterial.visible = false;
+  mesh.material = hiddenMaterial;
   mesh.castShadow = false;
   mesh.receiveShadow = false;
   mesh.userData.disposeMaterial = true;
+}
+
+function disableSetpieceShadows(root: THREE.Object3D): void {
+  root.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.castShadow = false;
+    }
+  });
 }
 
 function decorateCraneMastAssembly(
@@ -2986,12 +3691,23 @@ function addCraneVisualBox(
   material: THREE.Material,
   position: THREE.Vector3
 ): THREE.Mesh {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), material);
+  return addSetpieceVisualBox(parent, name, size, material, position, true);
+}
+
+function addSetpieceVisualBox(
+  parent: THREE.Object3D,
+  name: string,
+  size: THREE.Vector3,
+  material: THREE.Material,
+  position: THREE.Vector3,
+  disposeMaterial: boolean
+): THREE.Mesh {
+  const mesh = new THREE.Mesh(sharedLevelBoxGeometry(size.x, size.y, size.z), material);
   mesh.name = name;
   mesh.position.copy(position);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  mesh.userData.disposeMaterial = true;
+  mesh.userData.disposeMaterial = disposeMaterial;
   parent.add(mesh);
   return mesh;
 }
@@ -3001,6 +3717,16 @@ function addCraneMergedVisualBoxes(
   name: string,
   parts: Array<{ size: THREE.Vector3; position: THREE.Vector3; rotation?: THREE.Euler }>,
   material: THREE.Material
+): THREE.Mesh | null {
+  return addSetpieceMergedVisualBoxes(parent, name, parts, material, true);
+}
+
+function addSetpieceMergedVisualBoxes(
+  parent: THREE.Object3D,
+  name: string,
+  parts: Array<{ size: THREE.Vector3; position: THREE.Vector3; rotation?: THREE.Euler }>,
+  material: THREE.Material,
+  disposeMaterial: boolean
 ): THREE.Mesh | null {
   const geometries = parts.map((part) => {
     const geometry = new THREE.BoxGeometry(part.size.x, part.size.y, part.size.z);
@@ -3013,14 +3739,16 @@ function addCraneMergedVisualBoxes(
     partGeometry.dispose();
   }
   if (!geometry) {
-    material.dispose();
+    if (disposeMaterial) {
+      material.dispose();
+    }
     return null;
   }
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = name;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  mesh.userData.disposeMaterial = true;
+  mesh.userData.disposeMaterial = disposeMaterial;
   parent.add(mesh);
   return mesh;
 }
@@ -3160,15 +3888,19 @@ function addCraneRiggingCable(
 }
 
 function craneVisualRoot(parent: THREE.Mesh): THREE.Object3D {
+  return setpieceVisualRoot(parent, "crane");
+}
+
+function setpieceVisualRoot(parent: THREE.Mesh, detailName: string): THREE.Object3D {
   if (isUnitScale(parent.scale)) {
     return parent;
   }
-  const userData = parent.userData as { craneVisualRoot?: THREE.Object3D };
-  let root = userData.craneVisualRoot;
+  const userData = parent.userData as { setpieceVisualRoot?: THREE.Object3D };
+  let root = userData.setpieceVisualRoot;
   if (!root) {
     root = new THREE.Object3D();
-    root.name = `${parent.name || "crane part"} unscaled crane details`;
-    userData.craneVisualRoot = root;
+    root.name = `${parent.name || "setpiece part"} unscaled ${detailName} details`;
+    userData.setpieceVisualRoot = root;
     parent.add(root);
   }
   root.scale.set(safeInverseScale(parent.scale.x), safeInverseScale(parent.scale.y), safeInverseScale(parent.scale.z));
@@ -4411,35 +5143,15 @@ function addStreetLight(context: LevelContext, x: number, z: number): void {
   });
   pole.mesh.userData.disposeMaterial = false;
 
-  const armMaterial = sharedLevelMaterial(
-    "street-light-arm",
-    () => new THREE.MeshStandardMaterial({ color: 0x3b464d, roughness: 0.48, metalness: 0.62, map: materialAtlasTile(10) })
+  const headMaterial = sharedLevelMaterial(
+    "street-light-head",
+    () => new THREE.MeshStandardMaterial({ color: 0x2f3a40, roughness: 0.44, metalness: 0.58, emissive: 0x2c1903, emissiveIntensity: 0.025, map: materialAtlasTile(10) })
   );
-  const lampMaterial = sharedLevelMaterial(
-    "street-light-lamp",
-    () => new THREE.MeshStandardMaterial({ color: 0x182026, roughness: 0.38, metalness: 0.58, map: materialAtlasTile(10) })
-  );
-  const lensMaterial = sharedLevelMaterial(
-    "street-light-lens",
-    () => new THREE.MeshStandardMaterial({ color: 0xc8a15a, roughness: 0.32, metalness: 0.18, emissive: 0x2c1903, emissiveIntensity: 0.04 })
-  );
-  const arm = new THREE.Mesh(sharedLevelBoxGeometry(0.34, 0.045, 0.045), armMaterial);
-  arm.name = "street light bracket";
-  arm.position.set(0.17, 0.68, 0);
-  arm.userData.disposeMaterial = false;
-  pole.mesh.add(arm);
-
-  const lamp = new THREE.Mesh(sharedLevelBoxGeometry(0.28, 0.09, 0.18), lampMaterial);
-  lamp.name = "street light housing";
-  lamp.position.set(0.38, 0.66, 0);
-  lamp.userData.disposeMaterial = false;
-  pole.mesh.add(lamp);
-
-  const lens = new THREE.Mesh(sharedLevelBoxGeometry(0.2, 0.026, 0.13), lensMaterial);
-  lens.name = "street light lens";
-  lens.position.set(0.38, 0.61, 0);
-  lens.userData.disposeMaterial = false;
-  pole.mesh.add(lens);
+  const head = new THREE.Mesh(sharedLevelBoxGeometry(0.48, 0.1, 0.18), headMaterial);
+  head.name = "street light bracketed head";
+  head.position.set(0.3, 0.66, 0);
+  head.userData.disposeMaterial = false;
+  pole.mesh.add(head);
 
 }
 
