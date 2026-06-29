@@ -113,6 +113,13 @@ declare global {
   }
 }
 
+interface ClientBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 test("renders a playable mobile portrait city trial inside the initial body-count budget", async ({ page }) => {
   test.setTimeout(LONG_TEST_TIMEOUT_MS);
   const consoleErrors = trackRuntimeErrors(page);
@@ -122,7 +129,7 @@ test("renders a playable mobile portrait city trial inside the initial body-coun
   await expect(page.locator(".hud")).toBeVisible();
   const mobileMenuButton = page.locator(".hud [data-action='menu']");
   await expect(mobileMenuButton).toHaveAttribute("aria-label", "Menu");
-  await expect(mobileMenuButton.evaluate((element) => (element as HTMLElement).innerText.trim())).resolves.toBe("");
+  await expect.poll(() => elementInnerText(page, ".hud [data-action='menu']"), { timeout: UI_READY_TIMEOUT_MS }).toBe("");
   await expect(fireButton(page)).toBeEnabled();
   await expect(page.getByRole("button", { name: "Heavy" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Impulse" })).toBeVisible();
@@ -627,10 +634,7 @@ function levelCard(page: Page, name: string): Locator {
 }
 
 async function dragPlaneTouch(page: Page): Promise<void> {
-  const canvasBox = await page.locator("canvas").boundingBox();
-  if (!canvasBox) {
-    throw new Error("Missing canvas box for plane touch drag");
-  }
+  const canvasBox = await waitForCanvasClientBox(page);
   const origin = {
     x: Math.round(canvasBox.x + canvasBox.width * 0.28),
     y: Math.round(canvasBox.y + canvasBox.height * 0.76)
@@ -657,6 +661,41 @@ async function dragPlaneTouch(page: Page): Promise<void> {
     clientX: target.x,
     clientY: target.y
   });
+}
+
+async function waitForCanvasClientBox(page: Page): Promise<ClientBox> {
+  await expect.poll(() => readCanvasClientBox(page), { timeout: LEVEL_START_TIMEOUT_MS }).not.toBeNull();
+  const box = await readCanvasClientBox(page);
+  if (!box) {
+    throw new Error("Missing canvas box for plane touch drag");
+  }
+  return box;
+}
+
+function readCanvasClientBox(page: Page): Promise<ClientBox | null> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      return null;
+    }
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+    return {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height
+    };
+  });
+}
+
+function elementInnerText(page: Page, selector: string): Promise<string | null> {
+  return page.evaluate((targetSelector) => {
+    const element = document.querySelector(targetSelector);
+    return element instanceof HTMLElement ? element.innerText.trim() : null;
+  }, selector);
 }
 
 async function releasePlaneTouch(page: Page): Promise<void> {
