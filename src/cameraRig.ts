@@ -8,10 +8,15 @@ interface CameraRenderer {
   setSize(width: number, height: number, updateStyle?: boolean): void;
 }
 
-const SPECTACLE_RADIUS = 16.2;
-const SPECTACLE_RADIUS_PORTRAIT = 31;
-const SPECTACLE_HEIGHT = 8.2;
-const SPECTACLE_HEIGHT_PORTRAIT = 17.5;
+const SPECTACLE_RADIUS = 31.5;
+const SPECTACLE_RADIUS_PORTRAIT = 35.5;
+const SPECTACLE_HEIGHT = 16.2;
+const SPECTACLE_HEIGHT_PORTRAIT = 21.2;
+const SPECTACLE_ENTRY_YAW = -0.82;
+const SPECTACLE_ROTATION_SPEED = 0.14;
+const SPECTACLE_PULLBACK_SECONDS = 1.15;
+const SPECTACLE_OVERVIEW_TARGET = new THREE.Vector3(0, 2.2, 0.9);
+const SPECTACLE_IMPACT_BIAS = 0.12;
 const DEFAULT_CANNON_ANCHOR = new THREE.Vector3(0, 6.9, 24.55);
 const DEFAULT_CITY_TARGET = new THREE.Vector3(0, 0.9, -2.6);
 
@@ -33,6 +38,7 @@ export class CameraRig {
   private cinematicCutTime = 0;
   private cinematicCutDuration = 0;
   private cinematicCutStrength = 0;
+  private spectaclePullbackTime = 0;
   private readonly cinematicCutPosition = new THREE.Vector3();
   private readonly cinematicCutTarget = new THREE.Vector3();
 
@@ -85,36 +91,28 @@ export class CameraRig {
   }
 
   spectacle(point: THREE.Vector3): void {
+    const enteringSpectacle = this.mode !== "spectacle";
     this.mode = "spectacle";
-    this.desiredTarget.copy(point);
-    this.desiredTarget.y = Math.max(1.0, this.desiredTarget.y);
+    if (enteringSpectacle) {
+      this.spectacleYaw = SPECTACLE_ENTRY_YAW;
+      this.spectaclePullbackTime = SPECTACLE_PULLBACK_SECONDS;
+      this.cinematicCutTime = 0;
+      this.cinematicCutDuration = 0;
+      this.cinematicCutStrength = 0;
+    }
+    this.desiredTarget.copy(SPECTACLE_OVERVIEW_TARGET);
+    this.desiredTarget.x += THREE.MathUtils.clamp(point.x, -18, 18) * SPECTACLE_IMPACT_BIAS;
+    this.desiredTarget.z += THREE.MathUtils.clamp(point.z, -18, 18) * SPECTACLE_IMPACT_BIAS;
+    this.desiredTarget.y += THREE.MathUtils.clamp(point.y - 1.2, -1, 4) * 0.08;
   }
 
-  cinematicImpact(point: THREE.Vector3, intensity = 1, direction?: THREE.Vector3): void {
+  cinematicImpact(point: THREE.Vector3, intensity = 1, _direction?: THREE.Vector3): void {
     this.spectacle(point);
     const clampedIntensity = THREE.MathUtils.clamp(intensity, 0.45, 2.2);
-    const impactDirection = direction && direction.lengthSq() > 0.001
-      ? direction.clone().normalize()
-      : new THREE.Vector3(Math.sin(this.spectacleYaw + 0.8), -0.18, Math.cos(this.spectacleYaw + 0.8)).normalize();
-    const side = new THREE.Vector3(-impactDirection.z, 0, impactDirection.x);
-    if (side.lengthSq() < 0.001) {
-      side.set(1, 0, 0);
-    }
-    side.normalize();
-    const portrait = this.camera.aspect < 0.75;
-    const trailingDistance = portrait ? 10.8 : THREE.MathUtils.lerp(8.4, 6.2, Math.min(1, clampedIntensity * 0.45));
-    const sideDistance = portrait ? 4.6 : THREE.MathUtils.lerp(3.8, 2.2, Math.min(1, clampedIntensity * 0.42));
-    const lift = portrait ? 7.6 : THREE.MathUtils.lerp(4.9, 3.3, Math.min(1, clampedIntensity * 0.38));
-    this.cinematicCutTarget.copy(point);
-    this.cinematicCutTarget.y = Math.max(1.05, Math.min(4.4, point.y + 0.58 + clampedIntensity * 0.28));
-    this.cinematicCutPosition
-      .copy(this.cinematicCutTarget)
-      .add(impactDirection.multiplyScalar(-trailingDistance))
-      .add(side.multiplyScalar(sideDistance))
-      .add(this.up.clone().multiplyScalar(lift));
-    this.cinematicCutDuration = THREE.MathUtils.lerp(0.64, 1.16, Math.min(1, clampedIntensity * 0.55));
-    this.cinematicCutTime = this.cinematicCutDuration;
-    this.cinematicCutStrength = clampedIntensity;
+    this.spectaclePullbackTime = Math.max(this.spectaclePullbackTime, SPECTACLE_PULLBACK_SECONDS + clampedIntensity * 0.08);
+    this.cinematicCutTime = 0;
+    this.cinematicCutDuration = 0;
+    this.cinematicCutStrength = 0;
   }
 
   setFocus(point: THREE.Vector3): void {
@@ -147,6 +145,7 @@ export class CameraRig {
     this.camera.position.sub(this.previousShake);
     this.previousShake.set(0, 0, 0);
     this.spectacleYaw = 0;
+    this.spectaclePullbackTime = 0;
     this.cinematicCutTime = 0;
     this.cinematicCutDuration = 0;
     this.cinematicCutStrength = 0;
@@ -164,6 +163,7 @@ export class CameraRig {
     this.cinematicCutTime = 0;
     this.cinematicCutDuration = 0;
     this.cinematicCutStrength = 0;
+    this.spectaclePullbackTime = 0;
     this.camera.position.copy(this.desiredPosition);
     this.currentTarget.copy(this.desiredTarget);
     this.camera.lookAt(this.currentTarget);
@@ -174,8 +174,10 @@ export class CameraRig {
     this.previousShake.set(0, 0, 0);
 
     if (this.mode === "spectacle") {
-      this.spectacleYaw += deltaSeconds * 0.34;
-      this.currentTarget.lerp(this.desiredTarget, 1 - Math.exp(-deltaSeconds * 2.2));
+      this.spectacleYaw += deltaSeconds * SPECTACLE_ROTATION_SPEED;
+      this.spectaclePullbackTime = Math.max(0, this.spectaclePullbackTime - deltaSeconds);
+      const pullingBack = this.spectaclePullbackTime > 0;
+      this.currentTarget.lerp(this.desiredTarget, 1 - Math.exp(-deltaSeconds * (pullingBack ? 1.9 : 0.75)));
       const portrait = this.camera.aspect < 0.75;
       const radius = portrait ? SPECTACLE_RADIUS_PORTRAIT : SPECTACLE_RADIUS;
       const height = portrait ? SPECTACLE_HEIGHT_PORTRAIT : SPECTACLE_HEIGHT;
@@ -191,7 +193,7 @@ export class CameraRig {
         this.currentTarget.lerp(this.cinematicCutTarget, 1 - Math.exp(-deltaSeconds * 6.8));
         this.camera.position.lerp(this.cinematicCutPosition, 1 - Math.exp(-deltaSeconds * (6.8 + cutBlend * 1.6)));
       } else {
-        this.camera.position.lerp(this.desiredPosition, 1 - Math.exp(-deltaSeconds * 2.15));
+        this.camera.position.lerp(this.desiredPosition, 1 - Math.exp(-deltaSeconds * (pullingBack ? 3.35 : 1.2)));
       }
     } else {
       const stiffness = this.mode === "projectile" ? 7.5 : this.mode === "aircraft" ? 5.9 : 4.6;

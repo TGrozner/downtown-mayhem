@@ -71,13 +71,13 @@ export const TEST_CHAMBERS: TestChamber[] = [
       order: 1,
       targetZone: "hazard-core",
       scoreThresholds: {
-        oneStar: 40_000,
-        twoStar: 90_000,
-        threeStar: 200_000
+        oneStar: 75_000,
+        twoStar: 145_000,
+        threeStar: 220_000
       },
-      targetDamageThreshold: 10_000,
-      bonusThreshold: { metric: "chainReactionCount", minimum: 100 },
-      bonusObjective: "Sustain 100+ secondary hits from the energy plant, gas line, substation, propane depot, parking silo, metro line, vehicle grid, or skyneedle debris.",
+      targetDamageThreshold: 30_000,
+      bonusThreshold: { metric: "chainReactionCount", minimum: 180 },
+      bonusObjective: "Sustain 180+ secondary hits from the energy plant, gas line, substation, propane depot, parking silo, metro line, vehicle grid, or skyneedle debris.",
       briefingHint: "Aim choice matters: gas is wide and low, the metro carries moving mass, the skyneedle sheds vertical debris, and the parking silo feeds vehicle chaos."
     },
     setup: (context) => {
@@ -113,13 +113,13 @@ export const TEST_CHAMBERS: TestChamber[] = [
       order: 2,
       targetZone: "breaker-spine",
       scoreThresholds: {
-        oneStar: 55_000,
-        twoStar: 120_000,
-        threeStar: 260_000
+        oneStar: 115_000,
+        twoStar: 230_000,
+        threeStar: 390_000
       },
-      targetDamageThreshold: 12_000,
-      bonusThreshold: { metric: "chainReactionCount", minimum: 120 },
-      bonusObjective: "Sustain 120+ secondary hits from breaker towers, substations, tankers, and vehicle debris.",
+      targetDamageThreshold: 42_000,
+      bonusThreshold: { metric: "chainReactionCount", minimum: 210 },
+      bonusObjective: "Sustain 210+ secondary hits from breaker towers, substations, tankers, and vehicle debris.",
       briefingHint: "The spine is tough but reliable; the substation yards are wider, flashier starters if you can catch the relay rows."
     },
     setup: (context) => setupBreakerYardCity(context)
@@ -138,13 +138,13 @@ export const TEST_CHAMBERS: TestChamber[] = [
       order: 3,
       targetZone: "glass-depot",
       scoreThresholds: {
-        oneStar: 60_000,
-        twoStar: 135_000,
-        threeStar: 300_000
+        oneStar: 125_000,
+        twoStar: 260_000,
+        threeStar: 440_000
       },
-      targetDamageThreshold: 13_000,
-      bonusThreshold: { metric: "collateralChaos", minimum: 28_000 },
-      bonusObjective: "Push 28,000+ collateral chaos from archive glass, foam redirects, vehicles, and service crates.",
+      targetDamageThreshold: 48_000,
+      bonusThreshold: { metric: "collateralChaos", minimum: 95_000 },
+      bonusObjective: "Push 95,000+ collateral chaos from archive glass, foam redirects, vehicles, and service crates.",
       briefingHint: "Foam is still the steering wheel, but now the city gives you multiple redirect lines instead of one obvious lane."
     },
     setup: (context) => setupSwitchbackCrushCity(context)
@@ -1851,7 +1851,6 @@ function spawnStrategicHazards(context: LevelContext): void {
 
 function spawnMayhemSpecialSetpieces(context: LevelContext): void {
   spawnNuclearPlant(context);
-  spawnGoldenEggBoss(context);
   spawnElectricSubstation(context);
   spawnPropaneDepot(context);
   spawnParkingSilo(context);
@@ -1908,87 +1907,6 @@ function spawnNuclearPlant(context: LevelContext): void {
     decorateHazardIndicator(tower.mesh, { size: tower.dimensions, kind: "explosive" });
     decorateStrategicHazard(tower.mesh, { label: tower.label, size: tower.dimensions, kind: "explosive" });
   }
-}
-
-function spawnGoldenEggBoss(context: LevelContext): void {
-  const material = context.materials.get("metal");
-  const renderMaterial = sharedLevelMaterial(
-    "golden-egg-boss-shell",
-    () =>
-      new THREE.MeshStandardMaterial({
-        color: 0xffc94a,
-        roughness: 0.28,
-        metalness: 0.82,
-        emissive: 0x3a2302,
-        emissiveIntensity: 0.2,
-        map: materialAtlasTile(10),
-        envMapIntensity: 1.45
-      })
-  );
-  const base = alignCityObjectToRoadEdges(new THREE.Vector3(7.95, 0, -8.55), new THREE.Vector3(1.3, 2.2, 1.3), Math.PI * 0.05);
-  const eggMesh = createGoldenEggMesh(renderMaterial);
-  const egg = context.physics.addDynamicBox({
-    label: "Golden egg boss",
-    material,
-    renderMaterial,
-    renderMesh: eggMesh,
-    position: new THREE.Vector3(base.x, 1.08, base.z),
-    size: new THREE.Vector3(1.06, 2.16, 1.06),
-    rotation: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI * 0.05, 0)),
-    category: "structure",
-    scoreRole: "target",
-    zoneId: "golden-egg-boss unique-boss",
-    canFracture: true,
-    destructible: true,
-    bodyType: "fixed",
-    chainSource: true,
-    fractureResistance: 3.8,
-    scoreValue: 24,
-    supportReleaseMassScale: 2.8
-  });
-  egg.mesh.userData.disposeMaterial = false;
-
-  const plinth = context.physics.addDynamicBox({
-    label: "Golden egg boss plinth",
-    material: context.materials.get("concrete"),
-    renderMaterial: sharedLevelMaterial(
-      "golden-egg-boss-plinth",
-      () => new THREE.MeshStandardMaterial({ color: 0x34313a, roughness: 0.78, metalness: 0.18, map: materialAtlasTile(1) })
-    ),
-    position: new THREE.Vector3(base.x, 0.18, base.z),
-    size: new THREE.Vector3(1.55, 0.36, 1.55),
-    category: "structure",
-    scoreRole: "neutral",
-    zoneId: "golden-egg-boss plinth",
-    canFracture: true,
-    destructible: true,
-    bodyType: "fixed",
-    chainSource: true,
-    fractureResistance: 1.6,
-    scoreValue: 26
-  });
-  plinth.mesh.userData.disposeMaterial = false;
-}
-
-function createGoldenEggMesh(renderMaterial: THREE.Material): THREE.Mesh {
-  const geometry = new THREE.SphereGeometry(0.5, 32, 22);
-  geometry.userData.sharedGeometry = false;
-  const mesh = new THREE.Mesh(geometry, renderMaterial);
-  mesh.name = "Golden egg boss";
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.userData.disposeMaterial = false;
-
-  const bandMaterial = sharedLevelMaterial(
-    "golden-egg-boss-band",
-    () => new THREE.MeshBasicMaterial({ color: 0xfff0a8, transparent: true, opacity: 0.88 })
-  );
-  const band = new THREE.Mesh(sharedLevelBoxGeometry(0.88, 0.035, 0.035), bandMaterial);
-  band.name = "golden egg embossed band";
-  band.position.set(0, 0.12, 0.5);
-  band.userData.disposeMaterial = false;
-  mesh.add(band);
-  return mesh;
 }
 
 function spawnElectricSubstation(context: LevelContext): void {
@@ -3003,9 +2921,10 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
       supportGroupId,
       destructible: false,
       canFracture: false,
-      supportReleaseImpulseScale: 0.72,
-      supportReleaseTorqueScale: 12,
-      supportReleaseMassScale: 0.55
+      supportReleaseImpulseScale: 1.18,
+      supportReleaseTorqueScale: 14.25,
+      supportReleaseMassScale: 3.05,
+      impactVolumeScale: 3.1
     }
   );
   hideCranePhysicsCore(mastAssembly);
@@ -3024,9 +2943,10 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
       supportGroupId,
       destructible: false,
       canFracture: false,
-      supportReleaseImpulseScale: 1.15,
-      supportReleaseTorqueScale: 13.5,
-      supportReleaseMassScale: 0.52,
+      supportReleaseImpulseScale: 1.52,
+      supportReleaseTorqueScale: 15.75,
+      supportReleaseMassScale: 4.25,
+      impactVolumeScale: 13.5,
       compoundColliders: [
         {
           size: new THREE.Vector3(0.9, 0.4, 0.9),
@@ -3151,9 +3071,10 @@ function spawnCentralConstructionCrane(context: LevelContext): void {
       supportReleaseHeight: 7.4,
       supportReleaseLowerHeight: 9.2,
       supportReleaseFallDirection: fallDirection,
-      supportReleaseImpulseScale: 0.18,
-      supportReleaseTorqueScale: 0.1,
-      supportReleaseMassScale: 4.8
+      supportReleaseImpulseScale: 0.42,
+      supportReleaseTorqueScale: 0.22,
+      supportReleaseMassScale: 6.6,
+      impactVolumeScale: 3.2
     }
   );
   decorateCranePayload(payload, { size: payloadSize, liftGap: payloadLiftGap });
@@ -3861,6 +3782,7 @@ interface CranePartOptions {
   supportReleaseImpulseScale?: number;
   supportReleaseTorqueScale?: number;
   supportReleaseMassScale?: number;
+  impactVolumeScale?: number;
   scoreRole?: ScoreRole;
   zoneId?: string;
   compoundColliders?: Array<{
@@ -3902,6 +3824,7 @@ function addCranePart(
     supportReleaseImpulseScale: options.supportReleaseImpulseScale,
     supportReleaseTorqueScale: options.supportReleaseTorqueScale,
     supportReleaseMassScale: options.supportReleaseMassScale,
+    impactVolumeScale: options.impactVolumeScale,
     canFracture: options.canFracture ?? true,
     fractureResistance: options.fractureResistance,
     destructible: options.destructible ?? true,

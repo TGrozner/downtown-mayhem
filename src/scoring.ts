@@ -5,9 +5,7 @@ import type { ProjectileDefinition } from "./projectile";
 
 const CHAIN_BASE_POINTS_CAP = 900;
 const CHAIN_AWARDED_POINTS_CAP = 1_200;
-const DEFAULT_GOLDEN_EGG_CHARGE_START = 40_000;
-const DEFAULT_GOLDEN_EGG_FULL_CHARGE = 240_000;
-const GOLDEN_EGG_MAX_MULTIPLIER = 8;
+const DAMAGE_HOTSPOT_LIMIT = 4;
 
 export type ScoreEventKind = "target" | "chain" | "chaos";
 
@@ -26,9 +24,7 @@ export interface ScoreBreakdown {
   remainingDebrisMotion: number;
   weakPointBreakCount: number;
   bossBreakCount: number;
-  goldenEggDestroyed: boolean;
-  goldenEggMultiplier: number;
-  goldenEggBonus: number;
+  damageHotspots: ScoreDamageHotspot[];
   mayhemRating: string;
   totalScore: number;
   shotName: string;
@@ -36,9 +32,21 @@ export interface ScoreBreakdown {
   maxChainCombo: number;
 }
 
-export interface ScoreFinalizeOptions {
-  goldenEggChargeStart?: number;
-  goldenEggFullCharge?: number;
+export interface ScoreDamageHotspot {
+  label: string;
+  points: number;
+  targetDamage: number;
+  collateralDamage: number;
+  hits: number;
+}
+
+interface MutableScoreDamageHotspot extends ScoreDamageHotspot {
+  sortIndex: number;
+}
+
+interface TargetScoreContribution {
+  object: ExplosionAffectedObject;
+  points: number;
 }
 
 export class ShotScoreTracker {
@@ -48,10 +56,10 @@ export class ShotScoreTracker {
   private currentProjectile: ProjectileDefinition | null = null;
   private chainReactionCount = 0;
   private maxChainCombo = 0;
-  private goldenEggDestroyed = false;
   private readonly scoredObjects = new Map<number, number>();
   private readonly weakPointBreakObjectIds = new Set<number>();
   private readonly bossBreakObjectIds = new Set<number>();
+  private readonly damageHotspots = new Map<string, MutableScoreDamageHotspot>();
 
   beginShot(projectile: ProjectileDefinition): void {
     this.targetDamage = 0;
@@ -59,22 +67,20 @@ export class ShotScoreTracker {
     this.chainReactionBonus = 0;
     this.chainReactionCount = 0;
     this.maxChainCombo = 0;
-    this.goldenEggDestroyed = false;
     this.currentProjectile = projectile;
     this.scoredObjects.clear();
     this.weakPointBreakObjectIds.clear();
     this.bossBreakObjectIds.clear();
+    this.damageHotspots.clear();
   }
 
   addExplosion(result: ExplosionResult): ScoreEvent[] {
     const events: ScoreEvent[] = [];
-    if (result.affectedObjects.some((object) => isGoldenEggObject(object) && object.fractured)) {
-      this.goldenEggDestroyed = true;
-    }
     this.recordSpecialBreaks(result);
     const target = this.dedupPositive(result);
     this.targetDamage += target.points;
     this.collateralChaos += result.materialChaos;
+    this.recordDamageHotspots(result, target.contributions);
     events.push(...target.events);
     events.push(...this.collateralEvents(result));
 
@@ -112,8 +118,7 @@ export class ShotScoreTracker {
     ];
   }
 
-  finalize(physics: PhysicsWorld, options: ScoreFinalizeOptions = {}): ScoreBreakdown {
-    const projectile = this.currentProjectile;
+  finalize(physics: PhysicsWorld): ScoreBreakdown {
     const remainingDebrisMotion = Math.round(
       physics
         .getDynamicObjects()
@@ -124,17 +129,23 @@ export class ShotScoreTracker {
           return sum + Math.min(80, speed * (object.isDebris ? 5.5 : 2.6));
         }, 0)
     );
+    return this.buildScoreBreakdown(remainingDebrisMotion);
+  }
+
+  preview(): ScoreBreakdown {
+    return this.buildScoreBreakdown(0);
+  }
+
+  private buildScoreBreakdown(remainingDebrisMotion: number): ScoreBreakdown {
+    const projectile = this.currentProjectile;
     const modifier = projectile?.scoreModifier ?? 1;
     const raw =
       this.targetDamage +
       this.collateralChaos +
       this.chainReactionBonus +
       remainingDebrisMotion;
-    const goldenEggMultiplier = this.goldenEggDestroyed
-      ? goldenEggMultiplierForRawScore(raw, options)
-      : 1;
     const modifiedRaw = raw * modifier;
-    const totalScore = Math.max(0, Math.round(modifiedRaw * goldenEggMultiplier));
+    const totalScore = Math.max(0, Math.round(modifiedRaw));
     return {
       targetDamage: Math.round(this.targetDamage * modifier),
       collateralChaos: Math.round(this.collateralChaos * modifier),
@@ -142,9 +153,7 @@ export class ShotScoreTracker {
       remainingDebrisMotion: Math.round(remainingDebrisMotion * modifier),
       weakPointBreakCount: this.weakPointBreakObjectIds.size,
       bossBreakCount: this.bossBreakObjectIds.size,
-      goldenEggDestroyed: this.goldenEggDestroyed,
-      goldenEggMultiplier,
-      goldenEggBonus: Math.max(0, Math.round(modifiedRaw * (goldenEggMultiplier - 1))),
+      damageHotspots: this.rankedDamageHotspots(modifier),
       mayhemRating: mayhemRating(totalScore),
       totalScore,
       shotName: projectile?.name ?? "No Shot",
@@ -153,13 +162,11 @@ export class ShotScoreTracker {
     };
   }
 
-  private dedupPositive(result: ExplosionResult): { points: number; events: ScoreEvent[] } {
+  private dedupPositive(result: ExplosionResult): { points: number; events: ScoreEvent[]; contributions: TargetScoreContribution[] } {
     let points = 0;
     const events: ScoreEvent[] = [];
+    const contributions: TargetScoreContribution[] = [];
     for (const object of result.affectedObjects) {
-      if (isGoldenEggObject(object)) {
-        continue;
-      }
       if (object.scoreRole !== "target") {
         continue;
       }
@@ -168,16 +175,17 @@ export class ShotScoreTracker {
       if (next > previous) {
         const delta = next - previous;
         points += delta;
+        contributions.push({ object, points: delta });
         events.push(scoreEventFromObject("target", objectScoreLabel(object), delta, object));
         this.scoredObjects.set(object.id, next);
       }
     }
-    return { points, events: events.sort(sortScoreEvents).slice(0, 7) };
+    return { points, events: events.sort(sortScoreEvents).slice(0, 7), contributions };
   }
 
   private recordSpecialBreaks(result: ExplosionResult): void {
     for (const object of result.affectedObjects) {
-      if (!object.fractured || isGoldenEggObject(object)) {
+      if (!object.fractured) {
         continue;
       }
       if (isWeakPointObject(object)) {
@@ -189,16 +197,78 @@ export class ShotScoreTracker {
     }
   }
 
+  private recordDamageHotspots(result: ExplosionResult, targetContributions: TargetScoreContribution[]): void {
+    const targetObjectIds = new Set<number>();
+    for (const contribution of targetContributions) {
+      targetObjectIds.add(contribution.object.id);
+      this.addDamageHotspot(contribution.object, contribution.points, "target");
+    }
+
+    const weightedObjects = result.affectedObjects.filter((object) => object.weightedDamage > 0);
+    const totalWeightedDamage = weightedObjects.reduce((sum, object) => sum + object.weightedDamage, 0);
+    if (result.materialChaos <= 0 || totalWeightedDamage <= 0) {
+      return;
+    }
+
+    let allocatedChaos = 0;
+    weightedObjects.forEach((object, index) => {
+      const points =
+        index === weightedObjects.length - 1
+          ? Math.max(0, Math.round(result.materialChaos) - allocatedChaos)
+          : Math.round(result.materialChaos * (object.weightedDamage / totalWeightedDamage));
+      if (points <= 0) {
+        return;
+      }
+      allocatedChaos += points;
+      this.addDamageHotspot(object, points, "collateral", !targetObjectIds.has(object.id));
+    });
+  }
+
+  private addDamageHotspot(object: ExplosionAffectedObject, points: number, kind: "target" | "collateral", countHit = true): void {
+    const label = damageHotspotLabel(object);
+    const key = damageHotspotKey(label);
+    const current =
+      this.damageHotspots.get(key) ??
+      {
+        label,
+        points: 0,
+        targetDamage: 0,
+        collateralDamage: 0,
+        hits: 0,
+        sortIndex: this.damageHotspots.size
+      };
+    current.points += points;
+    if (countHit) {
+      current.hits += 1;
+    }
+    if (kind === "target") {
+      current.targetDamage += points;
+    } else {
+      current.collateralDamage += points;
+    }
+    this.damageHotspots.set(key, current);
+  }
+
+  private rankedDamageHotspots(modifier: number): ScoreDamageHotspot[] {
+    return [...this.damageHotspots.values()]
+      .sort((a, b) => b.points - a.points || b.hits - a.hits || a.sortIndex - b.sortIndex)
+      .slice(0, DAMAGE_HOTSPOT_LIMIT)
+      .map((hotspot) => ({
+        label: hotspot.label,
+        points: Math.round(hotspot.points * modifier),
+        targetDamage: Math.round(hotspot.targetDamage * modifier),
+        collateralDamage: Math.round(hotspot.collateralDamage * modifier),
+        hits: hotspot.hits
+      }));
+  }
+
   private collateralEvents(result: ExplosionResult): ScoreEvent[] {
     const events: ScoreEvent[] = [];
     for (const object of result.affectedObjects) {
-      if (isGoldenEggObject(object)) {
-        continue;
-      }
       if (object.scoreRole === "target") {
         continue;
       }
-      const points = Math.round(object.weightedDamage * (object.fractured ? 0.42 : 0.24));
+      const points = collateralObjectScorePoints(object);
       if (points < 18) {
         continue;
       }
@@ -206,19 +276,6 @@ export class ShotScoreTracker {
     }
     return events.sort(sortScoreEvents).slice(0, 2);
   }
-}
-
-export function goldenEggMultiplierForRawScore(rawScore: number, options: ScoreFinalizeOptions = {}): number {
-  const chargeStart = options.goldenEggChargeStart ?? DEFAULT_GOLDEN_EGG_CHARGE_START;
-  const fullCharge = Math.max(chargeStart + 1, options.goldenEggFullCharge ?? DEFAULT_GOLDEN_EGG_FULL_CHARGE);
-  const charge = THREE.MathUtils.clamp((rawScore - chargeStart) / (fullCharge - chargeStart), 0, 1);
-  return Number((1 + (GOLDEN_EGG_MAX_MULTIPLIER - 1) * charge).toFixed(2));
-}
-
-function isGoldenEggObject(object: ExplosionAffectedObject): boolean {
-  const label = object.label.toLowerCase();
-  const zone = object.zoneId ?? "";
-  return zone.includes("golden-egg") || label.includes("golden egg");
 }
 
 function isWeakPointObject(object: ExplosionAffectedObject): boolean {
@@ -237,9 +294,6 @@ function isWeakPointObject(object: ExplosionAffectedObject): boolean {
 }
 
 function isBossObject(object: ExplosionAffectedObject): boolean {
-  if (isGoldenEggObject(object)) {
-    return false;
-  }
   const text = searchableObjectText(object);
   return text.includes("unique-boss") || text.includes("breaker-boss") || text.includes("archive-boss") || text.includes(" boss");
 }
@@ -259,6 +313,70 @@ function scoreEventFromObject(kind: ScoreEventKind, label: string, points: numbe
 
 function sortScoreEvents(a: ScoreEvent, b: ScoreEvent): number {
   return Math.abs(b.points) - Math.abs(a.points);
+}
+
+function collateralObjectScorePoints(object: ExplosionAffectedObject): number {
+  return Math.round(object.weightedDamage * (object.fractured ? 0.42 : 0.24));
+}
+
+function damageHotspotKey(label: string): string {
+  return label.toLowerCase();
+}
+
+function damageHotspotLabel(object: ExplosionAffectedObject): string {
+  const text = searchableObjectText(object);
+  if (text.includes("nuclear-plant") || text.includes("nuclear plant")) {
+    return "Nuclear plant";
+  }
+  if (text.includes("energy-plant") || text.includes("energy plant")) {
+    return "Energy plant";
+  }
+  if (text.includes("gas-station") || text.includes("gas station") || text.includes("fuel-pump") || text.includes("gas-line")) {
+    return "Gas station";
+  }
+  if (text.includes("electric-substation") || text.includes("electric substation") || text.includes("substation")) {
+    return "Substation";
+  }
+  if (text.includes("propane-depot") || text.includes("propane")) {
+    return "Propane depot";
+  }
+  if (text.includes("parking-silo") || text.includes("parking garage")) {
+    return "Parking silo";
+  }
+  if (text.includes("elevated-metro") || text.includes("elevated metro")) {
+    return "Elevated metro";
+  }
+  if (text.includes("skyneedle")) {
+    return "Skyneedle";
+  }
+  if (text.includes("construction-scaffold") || text.includes("construction scaffold")) {
+    return "Scaffolds";
+  }
+  if (text.includes("breaker-boss")) {
+    return "Breaker boss";
+  }
+  if (text.includes("breaker-spine")) {
+    return "Breaker spine";
+  }
+  if (text.includes("archive-boss")) {
+    return "Archive boss";
+  }
+  if (text.includes("glass-depot") || text.includes("glass depot")) {
+    return "Glass depot";
+  }
+  if (text.includes("moving-vehicles") || text.includes("vehicle") || text.includes("truck") || text.includes("bus")) {
+    return "Vehicle grid";
+  }
+  return compactDamageLabel(object.label);
+}
+
+function compactDamageLabel(label: string): string {
+  return label
+    .replace(/\bweak point\b/gi, "")
+    .replace(/\bsignature debris\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 38);
 }
 
 function chainLabel(combo: number): string {
@@ -366,13 +484,13 @@ function damagedVerb(materialId: ExplosionAffectedObject["materialId"]): string 
 }
 
 function mayhemRating(totalScore: number): string {
-  if (totalScore >= 3_600_000) {
+  if (totalScore >= 540_000) {
     return "MAXIMUM MAYHEM";
   }
-  if (totalScore >= 2_600_000) {
+  if (totalScore >= 340_000) {
     return "CITY WRECKER";
   }
-  if (totalScore >= 1_600_000) {
+  if (totalScore >= 200_000) {
     return "DISTRICT WRECKER";
   }
   return "SPARK SHOW";

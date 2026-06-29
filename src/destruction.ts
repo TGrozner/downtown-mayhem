@@ -171,6 +171,48 @@ function fractureThresholdFor(material: MaterialDefinition, object: PhysicsObjec
   return material.fractureThreshold * Math.max(0.1, object.fractureResistance ?? 1) * scale;
 }
 
+function impactVolumeScaleFor(object: PhysicsObject): number {
+  return clamp(object.impactVolumeScale ?? 1, 0.2, 24);
+}
+
+function sourceImpactVolume(object: PhysicsObject): number {
+  const baseVolume = object.dimensions.x * object.dimensions.y * object.dimensions.z;
+  return Math.max(0.02, baseVolume * impactVolumeScaleFor(object));
+}
+
+function impactImpulseCap(impactVolumeScale: number, dominoFracture: boolean): number {
+  if (impactVolumeScale <= 1) {
+    return dominoFracture ? 11 : 18;
+  }
+  const baseCap = dominoFracture ? 14 : 18;
+  const maxCap = dominoFracture ? 21 : 38;
+  return Math.min(maxCap, baseCap + Math.sqrt(impactVolumeScale) * 3.6);
+}
+
+function impactImpulseFloor(impactVolumeScale: number, dominoFracture: boolean): number {
+  if (impactVolumeScale <= 1) {
+    return dominoFracture ? 2.8 : 0;
+  }
+  if (dominoFracture) {
+    return Math.min(5.2, 3.4 + Math.sqrt(impactVolumeScale) * 0.4);
+  }
+  return Math.min(4.3, 1.05 + Math.sqrt(impactVolumeScale) * 0.62);
+}
+
+function impactImpulseEnergyScale(impactVolumeScale: number): number {
+  if (impactVolumeScale <= 1) {
+    return 0.24;
+  }
+  return 0.24 + Math.min(0.08, Math.log2(impactVolumeScale) * 0.018);
+}
+
+function impactFractureBlastRadius(impactVolumeScale: number): number {
+  if (impactVolumeScale <= 1) {
+    return 1.35;
+  }
+  return Math.min(2.15, 1.35 + Math.sqrt(impactVolumeScale) * 0.16);
+}
+
 function createFragmentPoolBoxGeometry(): THREE.BoxGeometry {
   const geometry = new THREE.BoxGeometry(1, 1, 1);
   geometry.userData.sharedGeometry = true;
@@ -1154,7 +1196,8 @@ export class DestructionSystem {
   impact(source: PhysicsObject, target: PhysicsObject, origin: THREE.Vector3, relativeSpeed: number): ExplosionResult {
     const sourceMaterial = this.materials.get(source.materialId);
     const targetMaterial = this.materials.get(target.materialId);
-    const sourceVolume = Math.max(0.02, source.dimensions.x * source.dimensions.y * source.dimensions.z);
+    const impactVolumeScale = impactVolumeScaleFor(source);
+    const sourceVolume = sourceImpactVolume(source);
     const chainBoost = source.chainSource ? (source.isDebris ? 1.32 : 1.08) : 1;
     const impactMass = Math.max(0.35, sourceVolume * sourceMaterial.density * 7.8 * chainBoost);
     const energy = (relativeSpeed * impactMass * Math.max(0.65, sourceMaterial.massFactor)) / Math.max(0.55, targetMaterial.massFactor);
@@ -1170,7 +1213,10 @@ export class DestructionSystem {
     const sourcePosition = vectorFromRapier(source.body.translation());
     const targetPosition = vectorFromRapier(target.body.translation());
     const direction = targetPosition.clone().sub(sourcePosition).normalize();
-    const impulseMagnitude = Math.min(dominoFracture ? 11 : 18, Math.max(dominoFracture ? 2.8 : 0, energy * 0.24));
+    const impulseMagnitude = Math.min(
+      impactImpulseCap(impactVolumeScale, dominoFracture),
+      Math.max(impactImpulseFloor(impactVolumeScale, dominoFracture), energy * impactImpulseEnergyScale(impactVolumeScale))
+    );
     if (impulseMagnitude > 0.01 && target.bodyType === "dynamic" && this.physics.getObject(target.id)) {
       target.body.applyImpulse(
         {
@@ -1217,7 +1263,13 @@ export class DestructionSystem {
     affectedObjects.push(affectedObject);
 
     if (fractured && this.physics.getObject(target.id)) {
-      this.queueFracture(target, origin, Math.max(dominoFracture ? 5.5 : 8, energy * (dominoFracture ? 0.34 : 0.52)), 1.35, energy);
+      this.queueFracture(
+        target,
+        origin,
+        Math.max(dominoFracture ? 5.5 : 8, energy * (dominoFracture ? 0.34 : 0.52)),
+        impactFractureBlastRadius(impactVolumeScale),
+        energy
+      );
     }
     if (sourceShattered && this.physics.getObject(source.id)) {
       const sourceWeightedDamage = Math.round(source.scoreValue * Math.min(1.2, energy / Math.max(1, fractureThresholdFor(sourceMaterial, source, 1.6))));
@@ -1630,17 +1682,24 @@ export class DestructionSystem {
     if (!source.chainSource || !target.destructible || !target.canFracture) {
       return false;
     }
-    if (relativeSpeed < 3) {
+    const impactVolumeScale = impactVolumeScaleFor(source);
+    if (relativeSpeed < (impactVolumeScale > 1 ? 1.65 : 3)) {
       return false;
     }
 
-    const sourceVolume = source.dimensions.x * source.dimensions.y * source.dimensions.z;
+    const sourceVolume = sourceImpactVolume(source);
     const targetFragility = materialDominoFragility(targetMaterial.id);
     const sourceBite = materialDominoBite(sourceMaterial.id);
-    const speedFactor = clamp((relativeSpeed - 2.5) / 5.4, 0, 1);
-    const massFactor = clamp(sourceVolume / 0.075, 0.25, 1.35);
+    const speedFactor = clamp((relativeSpeed - (impactVolumeScale > 1 ? 1.8 : 2.5)) / 5.4, 0, 1);
+    const massFactor = clamp(sourceVolume / 0.075, 0.25, impactVolumeScale > 1 ? 2.8 : 1.35);
     const energyFactor = clamp(impactEnergy / Math.max(1, fractureThresholdFor(targetMaterial, target)), 0, 1);
-    const chance = clamp(0.015 + targetFragility * 0.08 + sourceBite * 0.05 + speedFactor * 0.11 + massFactor * 0.04 + energyFactor * 0.08, 0, 0.22);
+    const heavyImpactBias = impactVolumeScale > 1 ? Math.min(0.3, Math.log2(impactVolumeScale) * 0.065) : 0;
+    const chanceCap = impactVolumeScale > 1 ? Math.min(0.72, 0.32 + Math.sqrt(impactVolumeScale) * 0.09) : 0.22;
+    const chance = clamp(
+      0.015 + targetFragility * 0.08 + sourceBite * 0.05 + speedFactor * 0.11 + massFactor * 0.04 + energyFactor * 0.08 + heavyImpactBias,
+      0,
+      chanceCap
+    );
     return this.rng.next() < chance;
   }
 

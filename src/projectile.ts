@@ -70,7 +70,7 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     blastRadius: 3.05,
     fractureBoost: 0.98,
     scoreModifier: 1.22,
-    description: "Golden fragmentation burst that throws visible shrapnel and chained mini-pops."
+    description: "Bright fragmentation burst that throws visible shrapnel and chained mini-pops."
   },
   pulse: {
     id: "pulse",

@@ -2303,6 +2303,7 @@ class Game {
   private runVariant: RunVariant = runVariantForSeed("hazard-junction", this.runSeed);
   private mayhemContract: MayhemContract | null = null;
   private shotMayhemContract: MayhemContract | null = null;
+  private primaryImpactStarted = false;
   private readonly chainMilestonesAwarded = new Set<number>();
   private scoreReadyToFinalize = false;
   private scoreAutoRevealAt: number | null = null;
@@ -2412,7 +2413,8 @@ class Game {
       clearDebris: () => this.clearDebris(),
       finishRun: () => this.finishRun(),
       selectProjectile: (id) => this.selectProjectile(id),
-      nextLevel: () => this.nextLevel()
+      nextLevel: () => this.nextLevel(),
+      setTouchFlightIndicator: (state) => this.ui.setTouchFlightIndicator(state)
     });
     this.input.setMode(this.gameMode);
 
@@ -2667,8 +2669,16 @@ class Game {
       settings: this.settings,
       status: this.status,
       fps: this.displayedFps,
+      liveScore: this.liveScorePreview(),
       score: this.runState.score
     });
+  }
+
+  private liveScorePreview(): ScoreBreakdown | null {
+    if (this.runState.phase !== "spectacle" || this.runState.score) {
+      return null;
+    }
+    return this.scoreTracker.preview();
   }
 
   private refreshRunPlanning(): void {
@@ -2692,6 +2702,7 @@ class Game {
 
   private resetRunTelemetry(): void {
     this.shotMayhemContract = null;
+    this.primaryImpactStarted = false;
     this.chainMilestonesAwarded.clear();
     this.scoreReadyToFinalize = false;
     this.scoreAutoRevealAt = null;
@@ -4048,10 +4059,7 @@ class Game {
       return;
     }
     const level = this.currentLevel();
-    const score = this.scoreTracker.finalize(this.physics, {
-      goldenEggChargeStart: level.mission.scoreThresholds.oneStar,
-      goldenEggFullCharge: level.mission.scoreThresholds.threeStar
-    });
+    const score = this.scoreTracker.finalize(this.physics);
     const shotContract = this.shotMayhemContract ?? this.mayhemContract;
     const previousProgress = this.currentLevelProgress();
     const previousBestScore = previousProgress?.bestScore ?? 0;
@@ -4150,6 +4158,7 @@ class Game {
     if (this.aircraft.isCrashed() || this.runState.phase !== "flight") {
       return;
     }
+    this.primaryImpactStarted = true;
     const velocity = this.aircraft.getVelocity();
     const speed = velocity.length();
     const directionVector = speed > 0.01 ? velocity.clone().normalize() : this.aircraft.getForward();
@@ -4256,6 +4265,7 @@ class Game {
   }
 
   private handleImpact(point: THREE.Vector3, active: ActiveProjectile, hitObject: PhysicsObject | null): void {
+    this.primaryImpactStarted = true;
     const projectile = active.definition;
     const direction = active.object.body.linvel();
     const directionVector = new THREE.Vector3(direction.x, direction.y, direction.z);
@@ -4879,6 +4889,7 @@ class Game {
       return events;
     }
     const activeProjectile = this.runState.phase === "flight" ? this.projectiles.getActive() : null;
+    const secondaryImpactsLocked = this.runState.phase === "flight" && !this.primaryImpactStarted;
 
     const now = performance.now();
     if (now >= this.nextChainCooldownSweep) {
@@ -4893,6 +4904,7 @@ class Game {
     let impactsThisFrame = 0;
     let impactVfxThisFrame = 0;
     let projectileImpactHandled = false;
+    const chainCollisionDrainLimit = secondaryImpactsLocked ? Number.POSITIVE_INFINITY : CHAIN_COLLISION_DRAIN_MAX_PER_FRAME;
     const chainCollisionsDrained = this.physics.drainCollisionEventsInto((collision) => {
       if (projectileImpactHandled || impactsThisFrame >= CHAIN_IMPACT_MAX_PER_FRAME) {
         return;
@@ -4906,10 +4918,17 @@ class Game {
           const current = setVectorFromRapier(this.projectileCurrentPosition, activeProjectile.object.body.translation());
           const previous = this.projectilePreviousPosition.copy(activeProjectile.previousPosition);
           const candidate = projectileImpactCandidate(activeProjectile, projectileTarget, previous, current);
-          this.handleImpact(candidate?.point ?? closestPointOnObject(projectileTarget, current), activeProjectile, projectileTarget);
+          if (!candidate) {
+            return;
+          }
+          this.primaryImpactStarted = true;
+          this.handleImpact(candidate.point, activeProjectile, projectileTarget);
           projectileImpactHandled = true;
           return;
         }
+      }
+      if (secondaryImpactsLocked) {
+        return;
       }
       const pair = chainCollisionPair(collision.first, collision.second);
       if (!pair) {
@@ -4930,7 +4949,8 @@ class Game {
         targetPosition
       );
       const relativeSpeedSq = velocityLengthSq(relativeVelocity);
-      if (relativeSpeedSq < CHAIN_DEBRIS_MIN_SPEED * CHAIN_DEBRIS_MIN_SPEED) {
+      const minImpactSpeed = chainImpactMinSpeed(source);
+      if (relativeSpeedSq < minImpactSpeed * minImpactSpeed) {
         return;
       }
       const towardTarget = this.chainTowardTarget.copy(targetPosition).sub(sourcePosition);
@@ -4976,9 +4996,13 @@ class Game {
         perfMonitor.addCount("vfx.chainImpactSuppressed");
       }
       impactsThisFrame += 1;
-    }, CHAIN_COLLISION_DRAIN_MAX_PER_FRAME);
+    }, chainCollisionDrainLimit);
     perfMonitor.addCount("collision.chainDrained", chainCollisionsDrained);
     if (projectileImpactHandled) {
+      return events;
+    }
+    if (secondaryImpactsLocked) {
+      perfMonitor.addCount("collision.surfacePrePrimaryDrained", this.physics.drainSurfaceCollisionEventsInto(() => undefined));
       return events;
     }
     events.push(...this.processSurfaceImpacts(now));
@@ -5679,6 +5703,14 @@ function chainCollisionPair(first: PhysicsObject, second: PhysicsObject): { sour
 
 function isChainSource(object: PhysicsObject): boolean {
   return object.chainSource && object.category !== "projectile" && object.bodyType === "dynamic";
+}
+
+function chainImpactMinSpeed(source: PhysicsObject): number {
+  const impactVolumeScale = source.impactVolumeScale ?? 1;
+  if (impactVolumeScale <= 1) {
+    return CHAIN_DEBRIS_MIN_SPEED;
+  }
+  return Math.max(1.15, CHAIN_DEBRIS_MIN_SPEED - Math.min(0.7, Math.log2(impactVolumeScale) * 0.18));
 }
 
 function isChainTarget(object: PhysicsObject): boolean {
@@ -6574,21 +6606,6 @@ function clipSegmentAxis(
   return nextMin <= nextMax ? { tMin: nextMin, tMax: nextMax } : null;
 }
 
-function closestPointOnObject(object: PhysicsObject, point: THREE.Vector3): THREE.Vector3 {
-  if (object.shape === "sphere") {
-    const center = vectorFromRapier(object.body.translation());
-    const direction = point.clone().sub(center);
-    if (direction.lengthSq() < 0.0001) {
-      return center;
-    }
-    return center.add(direction.normalize().multiplyScalar(object.radius));
-  }
-  const center = vectorFromRapier(object.body.translation());
-  const rotation = quaternionFromRapier(object.body.rotation());
-  const localPoint = point.clone().sub(center).applyQuaternion(rotation.clone().invert());
-  return clampVectorToBox(localPoint, object.dimensions.clone().multiplyScalar(0.5)).applyQuaternion(rotation).add(center);
-}
-
 function clampVectorToBox(point: THREE.Vector3, halfSize: THREE.Vector3): THREE.Vector3 {
   return new THREE.Vector3(
     THREE.MathUtils.clamp(point.x, -halfSize.x, halfSize.x),
@@ -6721,9 +6738,7 @@ function moneyShotObjectPriority(
   const text = `${object.label} ${object.zoneId ?? ""}`.toLowerCase();
   let priority = 0;
 
-  if (text.includes("golden-egg") || text.includes("golden egg") || text.includes("unique-boss")) {
-    priority = 980;
-  } else if (text.includes("skyneedle") && (text.includes("crown") || text.includes("spire") || text.includes("signature-debris"))) {
+  if (text.includes("skyneedle") && (text.includes("crown") || text.includes("spire") || text.includes("signature-debris"))) {
     priority = 900;
   } else if (text.includes("weak-point") || text.includes("weak point") || text.includes("shear pin") || text.includes("release") || text.includes("latch")) {
     priority = 860;

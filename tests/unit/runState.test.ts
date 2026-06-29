@@ -56,9 +56,7 @@ function fakeScore(): ScoreBreakdown {
     remainingDebrisMotion: 0,
     weakPointBreakCount: 0,
     bossBreakCount: 0,
-    goldenEggDestroyed: false,
-    goldenEggMultiplier: 1,
-    goldenEggBonus: 0,
+    damageHotspots: [],
     totalScore: 0,
     mayhemRating: "TEST"
   };

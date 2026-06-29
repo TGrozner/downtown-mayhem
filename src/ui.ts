@@ -1,5 +1,6 @@
 import type { ArcadeLevelProgress, ArcadeResult } from "./arcade";
 import { GAME_MODES, type GameMode } from "./gameMode";
+import type { TouchFlightIndicatorState } from "./input";
 import type { ArcadeMissionFields } from "./levels";
 import type { ProjectileDefinition, ProjectileId } from "./projectile";
 import { PROJECTILE_ORDER, PROJECTILES } from "./projectile";
@@ -41,6 +42,7 @@ interface UIState {
   settings: GameSettings;
   status: string;
   fps: number;
+  liveScore: ScoreBreakdown | null;
   score: ScoreBreakdown | null;
 }
 
@@ -84,6 +86,10 @@ export class GameUI {
   private readonly fireButton: HTMLButtonElement;
   private readonly finishButton: HTMLButtonElement;
   private readonly finishHint: HTMLDivElement;
+  private readonly liveScorePanel: HTMLDivElement;
+  private readonly liveScoreValue: HTMLElement;
+  private readonly liveScoreRailValue: HTMLElement;
+  private readonly flightStick: HTMLDivElement;
   private readonly planeBoostButton: HTMLButtonElement;
   private readonly turnPrompt: HTMLButtonElement;
   private readonly turnPromptTitle: HTMLElement;
@@ -113,6 +119,7 @@ export class GameUI {
   private renderedHomeKey = "";
   private renderedSettingsKey = "";
   private scoreCountAnimation = 0;
+  private displayedLiveScore = 0;
 
   constructor(private readonly callbacks: UICallbacks) {
     installStyles();
@@ -132,7 +139,10 @@ export class GameUI {
         <div class="hud__telemetry">
           <span data-role="fps"></span>
           <span><strong data-role="bodies"></strong> objects</span>
-          <button type="button" data-action="menu">Menu</button>
+          <button class="hud__menu-button" type="button" data-action="menu" aria-label="Menu">
+            <span class="hud__menu-icon" aria-hidden="true"><i></i></span>
+            <span class="hud__menu-label">Menu</span>
+          </button>
         </div>
       </div>
 
@@ -166,6 +176,11 @@ export class GameUI {
           <button type="button" data-action="finish-run" hidden>Score Now</button>
           <button type="button" data-action="reset">Retry</button>
         </div>
+        <div class="hud__live-score" data-role="live-score" hidden>
+          <span>Running Mayhem</span>
+          <strong data-role="live-score-value">0</strong>
+          <div><i data-role="live-score-rail"></i></div>
+        </div>
         <div class="hud__finish-hint" data-role="finish-hint" hidden>Done watching the run? Press F or Enter, or click Score Now.</div>
         <div class="hud__status" data-role="status"></div>
       </section>
@@ -177,6 +192,10 @@ export class GameUI {
       </button>
 
       <div class="hud__plane-touch">
+        <div class="hud__flight-stick" data-role="flight-stick" hidden>
+          <span></span>
+          <i></i>
+        </div>
         <button class="hud__plane-boost" type="button" data-action="plane-boost" aria-label="Boost RC plane">BOOST</button>
       </div>
 
@@ -259,6 +278,10 @@ export class GameUI {
     this.fireButton = this.requireElement(".hud__fire");
     this.finishButton = this.requireElement("[data-action='finish-run']");
     this.finishHint = this.requireElement("[data-role='finish-hint']");
+    this.liveScorePanel = this.requireElement("[data-role='live-score']");
+    this.liveScoreValue = this.requireElement("[data-role='live-score-value']");
+    this.liveScoreRailValue = this.requireElement("[data-role='live-score-rail']");
+    this.flightStick = this.requireElement("[data-role='flight-stick']");
     this.planeBoostButton = this.requireElement("[data-action='plane-boost']");
     this.turnPrompt = this.requireElement("[data-action='turn-finish']");
     this.turnPromptTitle = this.requireElement("[data-role='turn-prompt-title']");
@@ -386,6 +409,18 @@ export class GameUI {
       this.finishButton.disabled = finishHidden || blocked;
     }
     const postShot = !state.shotAvailable && !state.score && !state.isFlyingRun;
+    const showLiveScore = postShot && this.screen === "play" && Boolean(state.liveScore);
+    if (this.liveScorePanel.hidden !== !showLiveScore) {
+      this.liveScorePanel.hidden = !showLiveScore;
+    }
+    if (showLiveScore && state.liveScore) {
+      this.updateLiveScore(state.liveScore, state.mission.scoreThresholds);
+    } else if (!state.score && this.displayedLiveScore !== 0) {
+      this.displayedLiveScore = 0;
+      setText(this.liveScoreValue, "0");
+      this.liveScoreRailValue.style.width = "0%";
+      this.liveScorePanel.classList.remove("is-surging");
+    }
     const turnPromptHidden = !postShot || this.screen !== "play";
     if (this.turnPrompt.hidden !== turnPromptHidden) {
       this.turnPrompt.hidden = turnPromptHidden;
@@ -397,7 +432,11 @@ export class GameUI {
     setText(this.turnPromptTitle, state.canFinishRun ? "Tap to score" : "Watching mayhem");
     setText(
       this.turnPromptHint,
-      state.canFinishRun ? "End the turn and show the result." : "Score unlocks when the chain reactions settle."
+      state.liveScore && state.liveScore.totalScore > 0
+        ? `${formatScoreNumber(state.liveScore.totalScore)} running Mayhem`
+        : state.canFinishRun
+          ? "End the turn and show the result."
+          : "Score unlocks when the chain reactions settle."
     );
     this.root.classList.toggle("is-post-shot", postShot);
     this.root.classList.toggle("is-plane-mode", planeMode);
@@ -487,6 +526,21 @@ export class GameUI {
     this.callbacks.setPlaneBoost(false);
     this.stopScoreCountUp();
     this.root.remove();
+  }
+
+  setTouchFlightIndicator(state: TouchFlightIndicatorState): void {
+    this.flightStick.hidden = !state.active;
+    this.flightStick.classList.toggle("is-active", state.active);
+    if (!state.active) {
+      return;
+    }
+    const radius = Math.max(1, state.radius);
+    const dx = Math.max(-radius, Math.min(radius, state.currentX - state.originX));
+    const dy = Math.max(-radius, Math.min(radius, state.currentY - state.originY));
+    this.flightStick.style.setProperty("--stick-origin-x", `${Math.round(state.originX)}px`);
+    this.flightStick.style.setProperty("--stick-origin-y", `${Math.round(state.originY)}px`);
+    this.flightStick.style.setProperty("--stick-knob-x", `${Math.round(56 + dx)}px`);
+    this.flightStick.style.setProperty("--stick-knob-y", `${Math.round(56 + dy)}px`);
   }
 
   private readonly handlePlaneBoostDown = (event: PointerEvent): void => {
@@ -582,7 +636,7 @@ export class GameUI {
     const tick = (now: number): void => {
       const progress = THREEClamp01((now - startedAt) / durationMs);
       const eased = 1 - (1 - progress) ** 3;
-      setText(value, formatScoreNumber(totalScore * eased));
+      setText(value, formatScoreNumber(initialScore + (totalScore - initialScore) * eased));
       if (progress < 1) {
         this.scoreCountAnimation = window.requestAnimationFrame(tick);
       } else {
@@ -590,8 +644,35 @@ export class GameUI {
         setText(value, formatScoreNumber(totalScore));
       }
     };
-    setText(value, "0");
+    const initialScore = Math.min(this.displayedLiveScore, totalScore);
+    setText(value, formatScoreNumber(initialScore));
     this.scoreCountAnimation = window.requestAnimationFrame(tick);
+  }
+
+  private updateLiveScore(score: ScoreBreakdown, thresholds: ArcadeMissionFields["scoreThresholds"]): void {
+    const target = Math.max(0, score.totalScore);
+    const previous = this.displayedLiveScore;
+    const next =
+      previous <= 0
+        ? target
+        : previous + (target - previous) * (target > previous ? 0.22 : 0.36);
+    this.displayedLiveScore = Math.abs(target - next) < 8 ? target : next;
+    setText(this.liveScoreValue, formatScoreNumber(this.displayedLiveScore));
+    const nextThreshold =
+      target < thresholds.oneStar
+        ? thresholds.oneStar
+        : target < thresholds.twoStar
+          ? thresholds.twoStar
+          : target < thresholds.threeStar
+            ? thresholds.threeStar
+            : Math.max(thresholds.threeStar, target);
+    const progress = nextThreshold <= 0 ? 1 : THREEClamp01(target / nextThreshold);
+    this.liveScoreRailValue.style.width = `${Math.round(progress * 100)}%`;
+    if (target > previous + 250) {
+      this.liveScorePanel.classList.remove("is-surging");
+      void this.liveScorePanel.offsetWidth;
+      this.liveScorePanel.classList.add("is-surging");
+    }
   }
 
   private stopScoreCountUp(): void {
@@ -655,6 +736,7 @@ function renderScore(state: UIState): string {
   const primaryAction = primaryResultAction(state);
   const hasNextDistrict = canStartNextDistrict(state);
   const bonusValue = bonusMetricValue(score, state.mission.bonusThreshold.metric);
+  const hotspots = score.damageHotspots.slice(0, 4);
   const goals = [
     {
       label: "Object damage",
@@ -714,11 +796,19 @@ function renderScore(state: UIState): string {
       <div><span>${state.gameMode === "plane" ? "Vehicle" : "Payload"}</span><strong>${escapeHtml(score.shotName)}</strong></div>
       <div><span>Collateral Chaos</span><strong>${formatScoreNumber(score.collateralChaos)}</strong></div>
       <div><span>Chain Score</span><strong>${formatScoreNumber(score.chainReactionBonus)}</strong></div>
-      <div><span>Secondary Hits</span><strong>${score.chainReactionCount}${score.maxChainCombo > 1 ? ` / x${score.maxChainCombo}` : ""}</strong></div>
+      <div><span>Secondary Hits</span><strong>${formatScoreNumber(score.chainReactionCount)}</strong></div>
+      ${score.maxChainCombo > 1 ? `<div><span>Best Chain</span><strong>${formatScoreNumber(score.maxChainCombo)}</strong></div>` : ""}
       ${score.weakPointBreakCount > 0 ? `<div><span>Weak Points</span><strong>${score.weakPointBreakCount}</strong></div>` : ""}
       ${score.bossBreakCount > 0 ? `<div><span>Boss Breaks</span><strong>${score.bossBreakCount}</strong></div>` : ""}
-      ${score.goldenEggDestroyed ? `<div><span>Golden Egg</span><strong>x${score.goldenEggMultiplier.toFixed(2)} +${formatScoreNumber(score.goldenEggBonus)}</strong></div>` : ""}
       <div><span>Motion Bonus</span><strong>${formatScoreNumber(score.remainingDebrisMotion)}</strong></div>
+    </div>
+    <div class="hud__damage-hotspots">
+      <div class="hud__damage-hotspots-head"><span>Top Damage</span><strong>${hotspots.length > 0 ? `${hotspots.length} zones` : "None"}</strong></div>
+      ${
+        hotspots.length > 0
+          ? hotspots.map(renderDamageHotspot).join("")
+          : `<div class="hud__damage-hotspot"><span><strong>No major location</strong><em>Direct hit or debris did not register a dominant zone</em></span><b>0</b></div>`
+      }
     </div>
     <div class="hud__result-actions">
       <button type="button" data-action="result-menu">Menu</button>
@@ -801,16 +891,10 @@ function resultCallouts(state: UIState, score: ScoreBreakdown): Array<{ classNam
       value: String(score.weakPointBreakCount)
     });
   }
-  if (score.maxChainCombo >= 4) {
+  if (score.chainReactionCount >= 20) {
     callouts.push({
       className: "is-chain-combo",
-      label: "Mayhem combo",
-      value: `x${score.maxChainCombo}`
-    });
-  } else if (score.chainReactionCount >= 20) {
-    callouts.push({
-      className: "is-chain-combo",
-      label: "Chain hits",
+      label: "Secondary hits",
       value: formatScoreNumber(score.chainReactionCount)
     });
   }
@@ -819,6 +903,30 @@ function resultCallouts(state: UIState, score: ScoreBreakdown): Array<{ classNam
 
 function renderResultCallout(callout: { className: string; label: string; value: string }): string {
   return `<div class="${callout.className}"><span>${escapeHtml(callout.label)}</span><strong>${escapeHtml(callout.value)}</strong></div>`;
+}
+
+function renderDamageHotspot(hotspot: ScoreBreakdown["damageHotspots"][number]): string {
+  return `
+    <div class="hud__damage-hotspot">
+      <span>
+        <strong>${escapeHtml(hotspot.label)}</strong>
+        <em>${escapeHtml(damageHotspotDetail(hotspot))}</em>
+      </span>
+      <b>${formatScoreNumber(hotspot.points)}</b>
+    </div>
+  `;
+}
+
+function damageHotspotDetail(hotspot: ScoreBreakdown["damageHotspots"][number]): string {
+  const parts = [];
+  if (hotspot.targetDamage > 0) {
+    parts.push(`${formatScoreNumber(hotspot.targetDamage)} object`);
+  }
+  if (hotspot.collateralDamage > 0) {
+    parts.push(`${formatScoreNumber(hotspot.collateralDamage)} chaos`);
+  }
+  parts.push(`${formatScoreNumber(hotspot.hits)} ${hotspot.hits === 1 ? "hit" : "hits"}`);
+  return parts.join(" / ");
 }
 
 function bestScoreLabel(state: UIState): string {
@@ -1136,8 +1244,8 @@ function installStyles(): void {
       white-space: nowrap;
     }
 
-    .hud__telemetry span,
-    .hud__telemetry button {
+    .hud__telemetry > span,
+    .hud__telemetry > button {
       display: inline-flex;
       align-items: center;
       min-height: 30px;
@@ -1156,6 +1264,44 @@ function installStyles(): void {
 
     .hud__telemetry button {
       cursor: pointer;
+    }
+
+    .hud__menu-button {
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .hud__menu-icon {
+      position: relative;
+      display: none;
+      width: 20px;
+      height: 16px;
+      color: #d9fbff;
+    }
+
+    .hud__menu-icon::before,
+    .hud__menu-icon::after,
+    .hud__menu-icon i {
+      content: "";
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      border-radius: 999px;
+      background: #d9fbff;
+      box-shadow: 0 0 12px rgba(189, 248, 255, 0.32);
+    }
+
+    .hud__menu-icon::before {
+      top: 0;
+    }
+
+    .hud__menu-icon i {
+      top: 6.5px;
+    }
+
+    .hud__menu-icon::after {
+      bottom: 0;
     }
 
     .hud__command {
@@ -1381,6 +1527,58 @@ function installStyles(): void {
       opacity: 0.82;
     }
 
+    .hud__live-score {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 5px 12px;
+      align-items: end;
+      min-height: 58px;
+      padding: 10px;
+      border: 1px solid rgba(121, 240, 255, 0.26);
+      border-radius: 7px;
+      background:
+        linear-gradient(90deg, rgba(121, 240, 255, 0.13), rgba(255, 207, 105, 0.1)),
+        rgba(7, 11, 17, 0.76);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .hud__live-score span {
+      color: #9db6c4;
+      font-size: 10px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .hud__live-score strong {
+      color: #96f4ff;
+      font-size: 25px;
+      line-height: 0.95;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 18px rgba(121, 240, 255, 0.22);
+    }
+
+    .hud__live-score div {
+      grid-column: 1 / -1;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .hud__live-score i {
+      display: block;
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #72f0a5, #79f0ff, #ffd36d);
+      box-shadow: 0 0 16px rgba(121, 240, 255, 0.45);
+      transition: width 140ms ease-out;
+    }
+
+    .hud__live-score.is-surging strong {
+      animation: liveScoreSurge 280ms ease-out both;
+    }
+
     .hud__turn-prompt {
       position: absolute;
       left: var(--hud-safe-left);
@@ -1443,14 +1641,54 @@ function installStyles(): void {
 
     .hud__plane-touch {
       position: absolute;
-      right: var(--hud-safe-right);
-      bottom: var(--hud-safe-bottom);
+      inset: 0;
       display: none;
       pointer-events: none;
       z-index: 4;
     }
 
+    .hud__flight-stick {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 112px;
+      height: 112px;
+      transform: translate3d(calc(var(--stick-origin-x, -200px) - 56px), calc(var(--stick-origin-y, -200px) - 56px), 0);
+      border: 1px solid rgba(189, 248, 255, 0.42);
+      border-radius: 8px;
+      background: rgba(5, 9, 14, 0.24);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24), inset 0 0 24px rgba(121, 240, 255, 0.08);
+      backdrop-filter: blur(8px);
+    }
+
+    .hud__flight-stick span {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 56px;
+      height: 56px;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(189, 248, 255, 0.28);
+      border-radius: 999px;
+    }
+
+    .hud__flight-stick i {
+      position: absolute;
+      left: var(--stick-knob-x, 56px);
+      top: var(--stick-knob-y, 56px);
+      width: 34px;
+      height: 34px;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(255, 255, 255, 0.64);
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(189, 248, 255, 0.94), rgba(121, 240, 255, 0.76));
+      box-shadow: 0 8px 22px rgba(57, 206, 230, 0.24);
+    }
+
     .hud__plane-boost {
+      position: absolute;
+      right: var(--hud-safe-right);
+      bottom: var(--hud-safe-bottom);
       pointer-events: auto;
       width: 116px;
       height: 116px;
@@ -1684,13 +1922,16 @@ function installStyles(): void {
     }
 
     .hud__objective-list,
-    .hud__score-breakdown {
+    .hud__score-breakdown,
+    .hud__damage-hotspots {
       display: grid;
       gap: 6px;
     }
 
     .hud__objective-list div,
     .hud__score-breakdown div,
+    .hud__damage-hotspot,
+    .hud__damage-hotspots-head,
     .hud__setting-row {
       display: flex;
       align-items: center;
@@ -1734,6 +1975,8 @@ function installStyles(): void {
 
     .hud__objective-list strong,
     .hud__score-breakdown strong,
+    .hud__damage-hotspots-head strong,
+    .hud__damage-hotspot b,
     .hud__setting-row strong {
       flex: 0 0 auto;
       min-width: max-content;
@@ -1747,6 +1990,58 @@ function installStyles(): void {
 
     .hud__score-breakdown .is-penalty {
       color: #ff8aa3;
+    }
+
+    .hud__damage-hotspots {
+      padding-top: 2px;
+    }
+
+    .hud__damage-hotspots-head {
+      min-height: 28px;
+      border: 1px solid rgba(121, 240, 255, 0.16);
+      background: rgba(121, 240, 255, 0.07);
+    }
+
+    .hud__damage-hotspots-head span {
+      color: #ffcf69;
+      font-size: 11px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .hud__damage-hotspot {
+      align-items: flex-start;
+      border-left: 3px solid rgba(121, 240, 255, 0.56);
+    }
+
+    .hud__damage-hotspot span {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .hud__damage-hotspot span strong {
+      overflow: hidden;
+      color: #ffffff;
+      font-size: 12px;
+      line-height: 1.15;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .hud__damage-hotspot span em {
+      overflow: hidden;
+      color: #9db6c4;
+      font-size: 10px;
+      font-style: normal;
+      line-height: 1.15;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .hud__damage-hotspot b {
+      color: #96f4ff;
+      font-variant-numeric: tabular-nums;
     }
 
     @keyframes resultPanelIn {
@@ -1796,6 +2091,21 @@ function installStyles(): void {
       }
       100% {
         transform: scale(1);
+      }
+    }
+
+    @keyframes liveScoreSurge {
+      0% {
+        transform: translateY(1px) scale(0.98);
+        filter: brightness(0.92);
+      }
+      62% {
+        transform: translateY(-1px) scale(1.045);
+        filter: brightness(1.2);
+      }
+      100% {
+        transform: translateY(0) scale(1);
+        filter: brightness(1);
       }
     }
 
@@ -1931,7 +2241,7 @@ function installStyles(): void {
     }
 
     .hud__settings-panel button {
-      min-height: 34px;
+      min-height: 44px;
       padding: 0 12px;
     }
 
@@ -1972,9 +2282,9 @@ function installStyles(): void {
 
     .hud__setting-row--toggle input {
       flex: 0 0 auto;
-      width: 22px;
-      height: 22px;
-      min-width: 22px;
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
     }
 
     .screen-flash {
@@ -1993,7 +2303,7 @@ function installStyles(): void {
         top: var(--hud-safe-top-mobile);
       }
 
-      .hud__telemetry span:nth-child(2) {
+      .hud__telemetry > span:nth-child(2) {
         display: none;
       }
 
@@ -2109,16 +2419,16 @@ function installStyles(): void {
         gap: 5px;
       }
 
-      .hud__telemetry span,
-      .hud__telemetry button {
-        min-height: 38px;
+      .hud__telemetry > span,
+      .hud__telemetry > button {
+        min-height: 44px;
         padding: 0 9px;
-        font-size: 10px;
+        font-size: 12px;
       }
 
       .hud.is-post-shot[data-screen="play"] .hud__brand-mark,
       .hud.is-post-shot[data-screen="play"] .hud__brand strong,
-      .hud.is-post-shot[data-screen="play"] .hud__telemetry span {
+      .hud.is-post-shot[data-screen="play"] .hud__telemetry > span {
         display: none;
       }
 
@@ -2195,7 +2505,7 @@ function installStyles(): void {
       }
 
       .hud__projectile span {
-        font-size: 9px;
+        font-size: 12px;
         line-height: 1.05;
       }
 
@@ -2205,7 +2515,7 @@ function installStyles(): void {
 
       .hud__fire {
         min-height: 50px;
-        font-size: 14px;
+        font-size: 16px;
         order: 20;
         position: sticky;
         bottom: 0;
@@ -2225,8 +2535,8 @@ function installStyles(): void {
       .hud__utility button,
       .hud__hero-actions button,
       .hud__result-actions button {
-        min-height: 40px;
-        font-size: 10px;
+        min-height: 44px;
+        font-size: 12px;
       }
 
       .hud__finish-hint {
@@ -2338,8 +2648,8 @@ function installStyles(): void {
       }
 
       .hud__segmented button {
-        min-height: 30px;
-        font-size: 10px;
+        min-height: 44px;
+        font-size: 12px;
       }
 
       .hud__result-head strong {
@@ -2378,7 +2688,7 @@ function installStyles(): void {
 
       .hud__topbar {
         left: var(--hud-safe-left-mobile);
-        right: auto;
+        right: var(--hud-safe-right-mobile);
         top: var(--hud-safe-top-mobile);
         gap: 6px;
         min-height: 40px;
@@ -2401,7 +2711,7 @@ function installStyles(): void {
 
       .hud__brand strong,
       .hud__brand span,
-      .hud__telemetry span {
+      .hud__telemetry > span {
         display: none;
       }
 
@@ -2414,6 +2724,53 @@ function installStyles(): void {
         min-height: 44px;
         padding: 0 9px;
         font-size: 10px;
+      }
+
+      .hud[data-screen="play"] .hud__topbar {
+        left: auto;
+        right: var(--hud-safe-right-mobile);
+        width: auto;
+        min-height: 48px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+      }
+
+      .hud[data-screen="play"] .hud__brand,
+      .hud[data-screen="play"] .hud__telemetry > span {
+        display: none;
+      }
+
+      .hud[data-screen="play"] .hud__telemetry {
+        gap: 0;
+      }
+
+      .hud[data-screen="play"] .hud__menu-button {
+        width: 48px;
+        min-width: 48px;
+        height: 48px;
+        min-height: 48px;
+        padding: 0;
+        border-color: rgba(189, 248, 255, 0.24);
+        border-radius: 8px;
+        color: #d9fbff;
+        background: rgba(5, 9, 14, 0.58);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(12px);
+      }
+
+      .hud[data-screen="play"] .hud__menu-button:active {
+        transform: translateY(1px);
+      }
+
+      .hud[data-screen="play"] .hud__menu-icon {
+        display: block;
+      }
+
+      .hud[data-screen="play"] .hud__menu-label {
+        display: none;
       }
 
       .hud__command {
@@ -2442,13 +2799,22 @@ function installStyles(): void {
 
       .hud__mission-kicker,
       .hud__mission > span,
-      .hud__mission > em,
       .hud__goal-grid,
       .hud__loadout-head,
       .hud__projectile small,
       .hud__finish-hint,
       .hud__status {
         display: none;
+      }
+
+      .hud[data-screen="play"] .hud__mission > em {
+        display: block;
+        overflow: hidden;
+        color: #9deeff;
+        font-size: 11px;
+        line-height: 1.18;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .hud__projectiles {
@@ -2462,13 +2828,13 @@ function installStyles(): void {
       }
 
       .hud__projectile span {
-        font-size: 10px;
+        font-size: 12px;
         line-height: 1;
       }
 
       .hud__fire {
         min-height: 52px;
-        font-size: 14px;
+        font-size: 16px;
       }
 
       .hud.has-shot-available[data-screen="play"] .hud__utility {

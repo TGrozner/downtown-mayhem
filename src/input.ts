@@ -4,6 +4,15 @@ import type { ProjectileId } from "./projectile";
 
 export type InputMode = "cannon" | "plane";
 
+export interface TouchFlightIndicatorState {
+  active: boolean;
+  originX: number;
+  originY: number;
+  currentX: number;
+  currentY: number;
+  radius: number;
+}
+
 interface InputCallbacks {
   aim(pointer: THREE.Vector2): void;
   fire(): void;
@@ -12,6 +21,7 @@ interface InputCallbacks {
   finishRun(): void;
   selectProjectile(id: ProjectileId): void;
   nextLevel(): void;
+  setTouchFlightIndicator?(state: TouchFlightIndicatorState): void;
 }
 
 export class InputController {
@@ -202,7 +212,11 @@ export class InputController {
       return;
     }
     event.preventDefault();
-    this.canvas.setPointerCapture(event.pointerId);
+    try {
+      this.canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic pointer events used by smoke tests may not be capturable.
+    }
     if (this.joystickPointerId !== null) {
       return;
     }
@@ -211,6 +225,7 @@ export class InputController {
     this.joystickOriginY = event.clientY;
     this.joystickCurrentX = event.clientX;
     this.joystickCurrentY = event.clientY;
+    this.emitTouchFlightIndicator();
   }
 
   private updateTouchFlightPointer(event: PointerEvent): void {
@@ -220,30 +235,47 @@ export class InputController {
     event.preventDefault();
     this.joystickCurrentX = event.clientX;
     this.joystickCurrentY = event.clientY;
+    this.emitTouchFlightIndicator();
   }
 
   private endTouchFlightPointer(pointerId: number): void {
     if (pointerId === this.joystickPointerId) {
       this.joystickPointerId = null;
+      this.emitTouchFlightIndicator(false);
     }
   }
 
   private clearTouchFlightInput(): void {
+    const wasActive = this.joystickPointerId !== null;
     this.joystickPointerId = null;
     this.uiBoostActive = false;
+    if (wasActive) {
+      this.emitTouchFlightIndicator(false);
+    }
   }
 
   private touchFlightAxis(): { pitch: number; yaw: number } {
     if (this.joystickPointerId === null) {
       return { pitch: 0, yaw: 0 };
     }
-    const radius = Math.max(56, Math.min(window.innerWidth, window.innerHeight) * 0.14);
+    const radius = touchFlightRadius();
     const yaw = applyDeadzone((this.joystickCurrentX - this.joystickOriginX) / radius, 0.08);
     const pitch = applyDeadzone((this.joystickOriginY - this.joystickCurrentY) / radius, 0.08);
     return {
       pitch: THREE.MathUtils.clamp(pitch, -1, 1),
       yaw: THREE.MathUtils.clamp(yaw, -1, 1)
     };
+  }
+
+  private emitTouchFlightIndicator(active = this.joystickPointerId !== null): void {
+    this.callbacks.setTouchFlightIndicator?.({
+      active,
+      originX: this.joystickOriginX,
+      originY: this.joystickOriginY,
+      currentX: this.joystickCurrentX,
+      currentY: this.joystickCurrentY,
+      radius: touchFlightRadius()
+    });
   }
 }
 
@@ -289,4 +321,8 @@ function applyDeadzone(value: number, deadzone: number): number {
     return 0;
   }
   return Math.sign(value) * ((magnitude - deadzone) / (1 - deadzone));
+}
+
+function touchFlightRadius(): number {
+  return Math.max(56, Math.min(window.innerWidth, window.innerHeight) * 0.14);
 }

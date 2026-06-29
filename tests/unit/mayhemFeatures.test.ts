@@ -7,12 +7,12 @@ const MISSION: ArcadeMissionFields = {
   order: 1,
   targetZone: "hazard-core",
   scoreThresholds: {
-    oneStar: 40_000,
-    twoStar: 90_000,
-    threeStar: 200_000
+    oneStar: 75_000,
+    twoStar: 145_000,
+    threeStar: 220_000
   },
-  targetDamageThreshold: 10_000,
-  bonusThreshold: { metric: "chainReactionCount", minimum: 100 },
+  targetDamageThreshold: 30_000,
+  bonusThreshold: { metric: "chainReactionCount", minimum: 180 },
   bonusObjective: "Sustain secondary hits.",
   briefingHint: "Aim at named setpieces."
 };

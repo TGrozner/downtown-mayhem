@@ -3,7 +3,7 @@ import * as THREE from "three";
 import type { ExplosionAffectedObject, ExplosionResult } from "../../src/destruction";
 import type { PhysicsWorld } from "../../src/physics";
 import { PROJECTILE_ORDER, PROJECTILES } from "../../src/projectile";
-import { goldenEggMultiplierForRawScore, ShotScoreTracker } from "../../src/scoring";
+import { ShotScoreTracker } from "../../src/scoring";
 
 describe("ShotScoreTracker", () => {
   test("exposes exactly four player projectile choices on keys one through four", () => {
@@ -121,6 +121,26 @@ describe("ShotScoreTracker", () => {
     });
   });
 
+  test("previews the running score without adding unsettled motion bonus", () => {
+    const tracker = new ShotScoreTracker();
+    tracker.beginShot(PROJECTILES.scatter);
+    tracker.addExplosion(
+      result({
+        materialChaos: 1_000,
+        affectedObjects: [affectedObject({ id: 1, scoreRole: "target", weightedDamage: 500, fractured: true })]
+      })
+    );
+    tracker.addChainReaction(250, new THREE.Vector3(0, 0, 0));
+
+    expect(tracker.preview()).toMatchObject({
+      targetDamage: 671,
+      collateralChaos: 1220,
+      chainReactionBonus: 305,
+      remainingDebrisMotion: 0,
+      totalScore: 2196
+    });
+  });
+
   test("scores remaining motion only for non-projectile bodies", () => {
     const tracker = new ShotScoreTracker();
     tracker.beginShot(PROJECTILES.slug);
@@ -140,14 +160,14 @@ describe("ShotScoreTracker", () => {
     });
   });
 
-  test("keeps mayhem ratings on the same scale as million-point score targets", () => {
+  test("keeps mayhem ratings on the calibrated district score scale", () => {
     const tracker = new ShotScoreTracker();
     tracker.beginShot(PROJECTILES.slug);
 
-    tracker.addExplosion(result({ materialChaos: 2_500_000 }));
+    tracker.addExplosion(result({ materialChaos: 405_000 }));
 
     expect(tracker.finalize(fakePhysics([]))).toMatchObject({
-      totalScore: 2_700_000,
+      totalScore: 437_400,
       mayhemRating: "CITY WRECKER"
     });
   });
@@ -168,7 +188,7 @@ describe("ShotScoreTracker", () => {
     });
   });
 
-  test("highlights weak point and boss breaks without counting golden egg boss parts", () => {
+  test("highlights weak point and boss breaks while aggregating readable damage hotspots", () => {
     const tracker = new ShotScoreTracker();
     tracker.beginShot(PROJECTILES.slug);
 
@@ -191,14 +211,6 @@ describe("ShotScoreTracker", () => {
             scoreRole: "target",
             weightedDamage: 80,
             fractured: true
-          }),
-          affectedObject({
-            id: 99,
-            label: "Golden egg boss",
-            zoneId: "golden-egg-boss",
-            scoreRole: "target",
-            weightedDamage: 120_000,
-            fractured: true
           })
         ]
       })
@@ -208,67 +220,57 @@ describe("ShotScoreTracker", () => {
     expect(tracker.finalize(fakePhysics([]))).toMatchObject({
       weakPointBreakCount: 1,
       bossBreakCount: 2,
-      goldenEggDestroyed: true
+      damageHotspots: [
+        { label: "Breaker boss", targetDamage: 119, points: 119, hits: 1 },
+        { label: "Archive boss", targetDamage: 95, points: 95, hits: 1 }
+      ]
     });
   });
 
-  test("charges the golden egg multiplier from normal destruction instead of boss-only damage", () => {
-    expect(goldenEggMultiplierForRawScore(20_000, { goldenEggChargeStart: 40_000, goldenEggFullCharge: 200_000 })).toBe(1);
-    expect(goldenEggMultiplierForRawScore(200_000, { goldenEggChargeStart: 40_000, goldenEggFullCharge: 200_000 })).toBe(8);
-
-    const bossOnly = new ShotScoreTracker();
-    bossOnly.beginShot(PROJECTILES.slug);
-    bossOnly.addExplosion(
+  test("ranks damage hotspots by real target damage and allocated collateral chaos", () => {
+    const tracker = new ShotScoreTracker();
+    tracker.beginShot(PROJECTILES.slug);
+    tracker.addExplosion(
       result({
-        materialChaos: 0,
+        materialChaos: 10_000,
         affectedObjects: [
           affectedObject({
-            id: 99,
-            label: "Golden egg boss",
-            zoneId: "golden-egg-boss",
+            id: 1,
+            label: "Gas station canopy",
+            zoneId: "gas-station canopy",
             scoreRole: "target",
-            weightedDamage: 50_000,
-            scoreValue: 50_000,
+            weightedDamage: 4_000,
+            fractured: true
+          }),
+          affectedObject({
+            id: 2,
+            label: "Gas line conduit",
+            zoneId: "gas-station gas-line",
+            scoreRole: "neutral",
+            weightedDamage: 1_000,
+            fractured: true
+          }),
+          affectedObject({
+            id: 3,
+            label: "Elevated metro guideway",
+            zoneId: "elevated-metro transit-spine",
+            scoreRole: "neutral",
+            weightedDamage: 5_000,
             fractured: true
           })
         ]
       })
     );
 
-    expect(
-      bossOnly.finalize(fakePhysics([]), { goldenEggChargeStart: 40_000, goldenEggFullCharge: 200_000 })
-    ).toMatchObject({
-      goldenEggDestroyed: true,
-      goldenEggMultiplier: 1,
-      goldenEggBonus: 0,
-      totalScore: 0
+    expect(tracker.finalize(fakePhysics([]))).toMatchObject({
+      targetDamage: 4752,
+      collateralChaos: 10800,
+      totalScore: 15552,
+      damageHotspots: [
+        { label: "Gas station", points: 10152, targetDamage: 4752, collateralDamage: 5400, hits: 2 },
+        { label: "Elevated metro", points: 5400, targetDamage: 0, collateralDamage: 5400, hits: 1 }
+      ]
     });
-
-    const strongRun = new ShotScoreTracker();
-    strongRun.beginShot(PROJECTILES.slug);
-    strongRun.addExplosion(
-      result({
-        materialChaos: 80_000,
-        affectedObjects: [
-          affectedObject({ id: 1, scoreRole: "target", weightedDamage: 120_000, fractured: true }),
-          affectedObject({
-            id: 99,
-            label: "Golden egg boss",
-            zoneId: "golden-egg-boss",
-            scoreRole: "target",
-            weightedDamage: 50_000,
-            scoreValue: 50_000,
-            fractured: true
-          })
-        ]
-      })
-    );
-
-    const score = strongRun.finalize(fakePhysics([]), { goldenEggChargeStart: 40_000, goldenEggFullCharge: 200_000 });
-    expect(score.goldenEggDestroyed).toBe(true);
-    expect(score.goldenEggMultiplier).toBeGreaterThan(1);
-    expect(score.goldenEggBonus).toBeGreaterThan(0);
-    expect(score.totalScore).toBeGreaterThan(score.targetDamage + score.collateralChaos);
   });
 });
 

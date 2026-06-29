@@ -54,6 +54,9 @@ interface RenderStats {
   levelName: string;
   rendererBackend: "webgl2" | "webgl";
   bodyCount: number;
+  dynamicBodyCount: number;
+  fixedStructureCount: number;
+  pendingSupportReleaseCount: number;
   drawCalls: number;
   triangles: number;
   lines: number;
@@ -117,6 +120,9 @@ test("renders a playable mobile portrait city trial inside the initial body-coun
   await bootTrial(page, MOBILE_PORTRAIT_VIEWPORT);
 
   await expect(page.locator(".hud")).toBeVisible();
+  const mobileMenuButton = page.locator(".hud [data-action='menu']");
+  await expect(mobileMenuButton).toHaveAttribute("aria-label", "Menu");
+  await expect(mobileMenuButton.evaluate((element) => (element as HTMLElement).innerText.trim())).resolves.toBe("");
   await expect(fireButton(page)).toBeEnabled();
   await expect(page.getByRole("button", { name: "Heavy" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Impulse" })).toBeVisible();
@@ -165,6 +171,7 @@ test("switches mobile portrait to a frictionless post-shot turn prompt", async (
   const turnPrompt = page.locator("[data-action='turn-finish']");
   await expect(turnPrompt).toBeVisible();
   await expect(turnPrompt).toContainText(/Watching mayhem|Tap to score/);
+  await expect(turnPrompt).toContainText(/running Mayhem|Score unlocks/);
   await expect(page.evaluate(mobilePostShotLayoutFailures)).resolves.toEqual([]);
 
   expect(consoleErrors).toEqual([]);
@@ -247,6 +254,10 @@ test("arms the RC crash run before launching on mobile", async ({ page }) => {
   await expect(page.locator(".hud__fire")).toBeHidden();
   await expect(page.locator("[data-action='reset']")).toBeVisible();
   await expect(page.locator(".hud__plane-boost")).toBeVisible();
+  await dragPlaneTouch(page);
+  await expect(page.locator("[data-role='flight-stick']")).toBeVisible();
+  await releasePlaneTouch(page);
+  await expect(page.locator("[data-role='flight-stick']")).toBeHidden();
   await expect(page.evaluate(mobilePlaneFlightLayoutFailures)).resolves.toEqual([]);
 
   await clickUi(page.locator("[data-action='reset']"));
@@ -338,6 +349,7 @@ test("selects a projectile, fires, then resets to a ready trial", async ({ page 
 
   await bootTrial(page, { width: 1024, height: 768 });
   await expectRenderableCanvas(page);
+  const initialStats = await waitForRenderStats(page);
 
   await clickUi(page.getByRole("button", { name: "Heavy" }));
   await expectSelectedProjectile(page, "Heavy");
@@ -371,6 +383,15 @@ test("selects a projectile, fires, then resets to a ready trial", async ({ page 
   await expect(fireButton(page)).toBeEnabled();
   await expectSelectedProjectile(page, "Frag");
   await expectBodyCountWithinBudget(page);
+  const resetStats = await waitForRenderStats(page);
+  expect(resetStats.fixedStructureCount).toBe(initialStats.fixedStructureCount);
+  expect(resetStats.pendingSupportReleaseCount).toBe(0);
+
+  await clickUi(fireButton(page));
+  await page.waitForTimeout(120);
+  const earlyFlightStats = await waitForRenderStats(page);
+  expect(earlyFlightStats.fixedStructureCount).toBe(resetStats.fixedStructureCount);
+  expect(earlyFlightStats.pendingSupportReleaseCount).toBe(0);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -592,9 +613,9 @@ async function uncheckUi(locator: Locator): Promise<void> {
 }
 
 async function expectRenderableCanvas(page: Page): Promise<void> {
-  await expect(page.locator("canvas")).toBeVisible({ timeout: UI_READY_TIMEOUT_MS });
-  await expect.poll(() => page.evaluate(hasRenderableCanvasSize).catch(() => false), { timeout: UI_READY_TIMEOUT_MS }).toBe(true);
-  await expect.poll(() => page.evaluate(hasInitializedRenderer).catch(() => false), { timeout: UI_READY_TIMEOUT_MS }).toBe(true);
+  await expect(page.locator("canvas")).toBeVisible({ timeout: LEVEL_START_TIMEOUT_MS });
+  await expect.poll(() => page.evaluate(hasRenderableCanvasSize).catch(() => false), { timeout: LEVEL_START_TIMEOUT_MS }).toBe(true);
+  await expect.poll(() => page.evaluate(hasInitializedRenderer).catch(() => false), { timeout: LEVEL_START_TIMEOUT_MS }).toBe(true);
 }
 
 function fireButton(page: Page) {
@@ -603,6 +624,51 @@ function fireButton(page: Page) {
 
 function levelCard(page: Page, name: string): Locator {
   return page.locator("[data-role='shell-levels'] [data-action='start-arcade']").filter({ hasText: name }).first();
+}
+
+async function dragPlaneTouch(page: Page): Promise<void> {
+  const canvasBox = await page.locator("canvas").boundingBox();
+  if (!canvasBox) {
+    throw new Error("Missing canvas box for plane touch drag");
+  }
+  const origin = {
+    x: Math.round(canvasBox.x + canvasBox.width * 0.28),
+    y: Math.round(canvasBox.y + canvasBox.height * 0.76)
+  };
+  const target = {
+    x: Math.round(canvasBox.x + canvasBox.width * 0.18),
+    y: Math.round(canvasBox.y + canvasBox.height * 0.66)
+  };
+  await page.dispatchEvent("canvas", "pointerdown", {
+    pointerId: 77,
+    pointerType: "touch",
+    isPrimary: true,
+    button: 0,
+    buttons: 1,
+    clientX: origin.x,
+    clientY: origin.y
+  });
+  await page.dispatchEvent("canvas", "pointermove", {
+    pointerId: 77,
+    pointerType: "touch",
+    isPrimary: true,
+    button: 0,
+    buttons: 1,
+    clientX: target.x,
+    clientY: target.y
+  });
+}
+
+async function releasePlaneTouch(page: Page): Promise<void> {
+  await page.dispatchEvent("canvas", "pointerup", {
+    pointerId: 77,
+    pointerType: "touch",
+    isPrimary: true,
+    button: 0,
+    buttons: 0,
+    clientX: 0,
+    clientY: 0
+  });
 }
 
 async function expectBodyCountWithinBudget(page: Page, budget = BODY_COUNT_BUDGET): Promise<void> {
@@ -627,6 +693,7 @@ async function expectFinalScore(page: Page, shotName: string): Promise<void> {
   await expect(scorePanel.getByText("Object damage", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Collateral Chaos", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Secondary Hits", { exact: true })).toBeVisible();
+  await expect(scorePanel.getByText("Top Damage", { exact: true })).toBeVisible();
 }
 
 async function waitForPerfLog(reason?: string): Promise<PerfLogPayload> {
@@ -926,6 +993,16 @@ function mobilePlayLayoutFailures(): string[] {
 
   if (topbarRect.height > 54) {
     failures.push(`top bar too tall: ${Math.ceil(topbarRect.height)}px`);
+  }
+
+  const menuButton = document.querySelector(".hud [data-action='menu']");
+  if (menuButton instanceof HTMLElement && menuButton.innerText.trim().toLowerCase() === "menu") {
+    failures.push("mobile play menu button shows a text label");
+  }
+
+  const mobileMission = document.querySelector(".hud__mission > em");
+  if (!(mobileMission instanceof HTMLElement) || !isVisible(mobileMission) || mobileMission.innerText.trim().length < 8) {
+    failures.push("mobile mission context is not readable");
   }
 
   if (topbarRect.bottom > commandRect.top - 160) {

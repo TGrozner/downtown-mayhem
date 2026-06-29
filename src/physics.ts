@@ -152,6 +152,7 @@ export interface PhysicsObject {
   supportReleaseImpulseScale?: number;
   supportReleaseTorqueScale?: number;
   supportReleaseMassScale?: number;
+  impactVolumeScale?: number;
   radius: number;
   bodyType: PhysicsBodyType;
   chainSource: boolean;
@@ -315,6 +316,7 @@ interface DynamicBoxOptions {
   supportReleaseImpulseScale?: number;
   supportReleaseTorqueScale?: number;
   supportReleaseMassScale?: number;
+  impactVolumeScale?: number;
   chainSource?: boolean;
   density?: number;
   friction?: number;
@@ -690,6 +692,7 @@ export class PhysicsWorld {
       supportReleaseImpulseScale: options.supportReleaseImpulseScale,
       supportReleaseTorqueScale: options.supportReleaseTorqueScale,
       supportReleaseMassScale: options.supportReleaseMassScale,
+      impactVolumeScale: options.impactVolumeScale,
       radius: options.size.length() * 0.5,
       bodyType,
       chainSource,
@@ -1368,6 +1371,7 @@ export class PhysicsWorld {
   }
 
   clearDynamic(): void {
+    this.clearEventQueue();
     for (const object of this.getDynamicObjects()) {
       this.removeObject(object.id);
     }
@@ -1379,6 +1383,7 @@ export class PhysicsWorld {
     this.releasedSupportGroups.clear();
     this.clearPendingSupportReleases();
     this.clearPendingEvents();
+    this.clearEventQueue();
     this.preStepVelocities.clear();
     this.preStepVelocitySamples.clear();
     this.clearFrozenDebris();
@@ -2145,6 +2150,10 @@ export class PhysicsWorld {
     this.pendingSurfaceCollisionEvents.length = 0;
     this.pendingSurfaceCollisionEventHead = 0;
     this.pendingSurfaceCollisionEventKeys.clear();
+  }
+
+  private clearEventQueue(): void {
+    this.eventQueue.drainCollisionEvents(() => undefined);
   }
 
   private clearPendingSupportReleases(): void {
