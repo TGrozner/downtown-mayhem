@@ -696,6 +696,10 @@ async function expectFinalScore(page: Page, shotName: string): Promise<void> {
   await expect(scorePanel).toHaveAttribute("data-result-state", /three-star|complete|one-star|incomplete/);
   await expect(scorePanel).toHaveAttribute("aria-label", /Mayhem Score/);
   await expect(scorePanel.locator(".hud__result-head")).toContainText(/Mayhem|Needs 2 Stars/);
+  await expect(scorePanel.locator("[data-role='result-boom']")).toContainText("BOOM");
+  await expect(scorePanel.locator("[data-role='progression-summary']")).toContainText("Progression");
+  await expect(scorePanel.locator("[data-role='share-card']")).toContainText("Share Card");
+  await expect(scorePanel.locator("[data-role='replay-summary']")).toContainText("Replay Summary");
   await expect(scorePanel.locator(".hud__score-breakdown")).toContainText(shotName);
   await expect(scorePanel.locator(".hud__result-actions .is-primary")).toBeVisible();
   await expect(scorePanel.locator(".hud__total strong")).toHaveText(/\d+/);
@@ -704,6 +708,7 @@ async function expectFinalScore(page: Page, shotName: string): Promise<void> {
   await expect(scorePanel.getByText("Run Contract", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Run Coach", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Retry recipe", { exact: true })).toBeVisible();
+  await expect(scorePanel.getByText("Next run plan", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Collateral Chaos", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Secondary Hits", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Top Damage", { exact: true })).toBeVisible();
