@@ -152,9 +152,9 @@ export const TEST_CHAMBERS: TestChamber[] = [
   {
     id: "relay-gauntlet",
     name: "Relay Gauntlet",
-    description: "A late breaker route tuned for payload-specific mastery through relay towers, traffic, and capacitor weak points.",
-    objective: "Use the right payload to open the relay web, then cash out through the boss capacitor and traffic loops.",
-    chaosBrief: "Payload choice matters: wide waves control the relay field, while heavy shots can punch the capacitor route.",
+    description: "A late breaker corridor with marked relay gates, traffic bait, and a boss capacitor staged as the final cash-out.",
+    objective: "Thread the relay lane, flip traffic into the transformer gates, then crack the boss capacitor weak points.",
+    chaosBrief: "This is a route level now: pads open the lane, transformers keep it alive, and the capacitor crown is the readable finish.",
     cannonPosition: new THREE.Vector3(-8.25, 6.2, 25.1),
     defaultAimPoint: new THREE.Vector3(4.9, 0.2, -5.2),
     cameraTarget: new THREE.Vector3(1.1, 1.0, -2.9),
@@ -170,16 +170,16 @@ export const TEST_CHAMBERS: TestChamber[] = [
       targetDamageThreshold: 58_000,
       bonusThreshold: { metric: "maxChainCombo", minimum: 28 },
       bonusObjective: "Build a x28+ max chain through breaker relays, capacitor weak points, moving traffic, and utility cargo.",
-      briefingHint: "Start on the capacitor stack or relay booths if you want a clean route; traffic and transformer rows are the high-score line."
+      briefingHint: "The blue route paint points from the relay gates to the capacitor crown; use traffic and spring pads to bridge the gaps."
     },
-    setup: (context) => setupBreakerYardCity(context)
+    setup: (context) => setupRelayGauntletCity(context)
   },
   {
     id: "overdrive-core",
     name: "Overdrive Core",
-    description: "A final combined challenge with brittle archive towers, redirect pads, pressure bulbs, and a high-score cascade route.",
-    objective: "Crack the archive boss, steer debris across both switchbacks, and keep collateral chaos alive until the score settles.",
-    chaosBrief: "This is the compact mastery test: damage, redirects, chain timing, and late-game payloads all matter.",
+    description: "A final overdrive bowl with prism route paint, pressure bulbs, mirrored redirect pads, and a fortified archive boss.",
+    objective: "Open the prism boss, rebound debris through both redirect arms, then harvest the pressure bulbs and archive traffic.",
+    chaosBrief: "This is a readable final exam: the boss lens starts the crash, pads reverse it, and bulbs/traffic keep the cascade alive.",
     cannonPosition: new THREE.Vector3(8.35, 6.15, 25.0),
     defaultAimPoint: new THREE.Vector3(7.35, 0.2, -4.55),
     cameraTarget: new THREE.Vector3(1.35, 1.05, -2.6),
@@ -195,9 +195,9 @@ export const TEST_CHAMBERS: TestChamber[] = [
       targetDamageThreshold: 66_000,
       bonusThreshold: { metric: "collateralChaos", minimum: 140_000 },
       bonusObjective: "Push 140,000+ collateral chaos from archive glass, redirect pads, pressure bulbs, traffic, and service crates.",
-      briefingHint: "The boss lens is the clean opener; the messy high-score route rides foam redirects into traffic and brittle towers."
+      briefingHint: "Follow the magenta switchback paint: boss lens, right redirect, center rebound, left archive crush, pressure bulbs."
     },
-    setup: (context) => setupSwitchbackCrushCity(context)
+    setup: (context) => setupOverdriveCoreCity(context)
   }
 ];
 
@@ -458,6 +458,35 @@ function setupSwitchbackCrushCity(context: LevelContext): void {
   spawnStreetSetpieces(context);
 }
 
+function setupRelayGauntletCity(context: LevelContext): void {
+  addCityGround(context);
+  spawnNeutralCityBlocks(context);
+  spawnInfillCityBlocks(context);
+  spawnVacantLotInfill(context);
+  spawnBreakerYardCore(context);
+  spawnBreakerYardRelayWeb(context);
+  spawnBreakerBossCapacitor(context);
+  spawnRelayGauntletRoutePaint(context);
+  spawnRelayGauntletCapacitorRoute(context);
+  spawnRelayGauntletTraffic(context);
+  spawnPowerGrid(context);
+  spawnStreetSetpieces(context);
+}
+
+function setupOverdriveCoreCity(context: LevelContext): void {
+  addCityGround(context);
+  spawnNeutralCityBlocks(context);
+  spawnInfillCityBlocks(context);
+  spawnVacantLotInfill(context);
+  spawnSwitchbackArchiveCore(context);
+  spawnSwitchbackRedirectors(context);
+  spawnArchiveBossLens(context);
+  spawnOverdriveCoreRoutePaint(context);
+  spawnOverdriveCoreSetpieces(context);
+  spawnOverdriveCoreTraffic(context);
+  spawnStreetSetpieces(context);
+}
+
 function spawnBreakerYardCore(context: LevelContext): void {
   const buildings: BuildingSpec[] = [
     {
@@ -703,6 +732,106 @@ function spawnBreakerYardStreetActivity(context: LevelContext): void {
   addBillboard(context, -6.85, 5.9, 0xffd66b);
 }
 
+function spawnRelayGauntletRoutePaint(context: LevelContext): void {
+  for (const [label, x, z, width, depth, color, opacity] of [
+    ["Relay gauntlet north entry stripe", -4.65, -6.28, 5.8, 0.34, 0x5de7ff, 0.34],
+    ["Relay gauntlet capacitor arrow stripe", 2.6, -6.18, 4.2, 0.42, 0x5de7ff, 0.38],
+    ["Relay gauntlet transformer gate stripe", 7.45, -3.2, 0.42, 4.6, 0xffb23f, 0.32],
+    ["Relay gauntlet traffic loop stripe", 6.2, -0.8, 3.65, 0.34, 0xffd66b, 0.3],
+    ["Relay gauntlet pad return stripe", 3.55, 3.72, 4.25, 0.34, 0x75e6ff, 0.32],
+    ["Relay gauntlet south cashout stripe", 5.0, 5.95, 3.6, 0.3, 0xff8f38, 0.3]
+  ] as const) {
+    addPanel(context, label, x, z, width, depth, color, opacity, CITY_GROUND_LAYER_MARKINGS + 1);
+  }
+}
+
+function spawnRelayGauntletCapacitorRoute(context: LevelContext): void {
+  for (const [type, label, x, z, width, height, depth, rotationY] of [
+    ["transformer", "Relay gauntlet opener transformer", -5.65, -4.92, 0.58, 0.78, 0.48, Math.PI * 0.08],
+    ["shockCanister", "Relay gauntlet split shock canister", -2.2, -5.18, 0.42, 0.72, 0.42, -Math.PI * 0.08],
+    ["springPad", "Relay gauntlet launch pad", 1.45, -5.56, 0.95, 0.22, 0.66, Math.PI * 0.08],
+    ["transformer", "Relay gauntlet boss gate transformer", 6.65, -3.75, 0.58, 0.82, 0.5, -Math.PI * 0.5],
+    ["shockCanister", "Relay gauntlet traffic shock canister", 7.25, 0.5, 0.42, 0.72, 0.42, Math.PI * 0.5],
+    ["springPad", "Relay gauntlet traffic rebound pad", 5.7, 3.42, 0.94, 0.22, 0.66, -Math.PI * 0.16]
+  ] as const) {
+    addHazardRelay(context, type, label, new THREE.Vector3(x, height * 0.5, z), new THREE.Vector3(width, height, depth), rotationY);
+  }
+
+  for (const [label, materialId, x, z, width, height, depth, rotationY] of [
+    ["Relay gauntlet power cable spine", "rubber", -3.82, -4.48, 2.5, 0.08, 0.08, Math.PI * 0.5],
+    ["Relay gauntlet power cable spine", "rubber", 0.24, -4.74, 2.7, 0.08, 0.08, Math.PI * 0.5],
+    ["Relay gauntlet capacitor cable bridge", "rubber", 3.64, -4.86, 2.05, 0.08, 0.08, Math.PI * 0.5],
+    ["Relay gauntlet utility cargo gate", "metal", 4.04, -3.02, 0.84, 0.52, 0.46, -Math.PI * 0.12],
+    ["Relay gauntlet coolant bounce pallet", "foam", 6.1, 2.42, 0.86, 0.38, 0.58, Math.PI * 0.16],
+    ["Relay gauntlet breaker stop block", "wood", 2.18, 3.52, 0.86, 0.42, 0.58, -Math.PI * 0.12]
+  ] as const) {
+    addStreetCargo(context, label, materialId, new THREE.Vector3(x, height * 0.5, z), new THREE.Vector3(width, height, depth), rotationY);
+  }
+
+  addStrategicHazardBox(context, {
+    label: "Relay gauntlet capacitor crown",
+    materialId: "metal",
+    position: new THREE.Vector3(5.72, 0.96, -4.02),
+    size: new THREE.Vector3(0.52, 1.92, 0.42),
+    zoneId: "breaker-boss capacitor-bank weak-point power-grid",
+    scoreValue: 430,
+    kind: "electric",
+    rotationY: -Math.PI * 0.04,
+    fractureResistance: 0.2,
+    showReadableMarker: true
+  });
+  addStrategicHazardBox(context, {
+    label: "Relay gauntlet discharge manifold",
+    materialId: "glass",
+    position: new THREE.Vector3(4.02, 0.42, -3.82),
+    size: new THREE.Vector3(0.78, 0.84, 0.36),
+    zoneId: "breaker-boss hazard-relay explosive power-grid",
+    scoreValue: 310,
+    kind: "electric",
+    rotationY: Math.PI * 0.5,
+    fractureResistance: 0.16,
+    showReadableMarker: true
+  });
+  addStrategicHazardBox(context, {
+    label: "Relay gauntlet overload fuse",
+    materialId: "glass",
+    position: new THREE.Vector3(6.9, 0.36, -5.64),
+    size: new THREE.Vector3(0.36, 0.72, 0.36),
+    zoneId: "breaker-boss hazard-relay explosive power-grid",
+    scoreValue: 260,
+    kind: "explosive",
+    fractureResistance: 0.12,
+    showReadableMarker: true
+  });
+
+  addBillboard(context, 2.35, -5.9, 0x5de7ff);
+  addBillboard(context, 7.9, -3.2, 0xffb23f);
+  addBillboard(context, 4.6, 3.86, 0x75e6ff);
+}
+
+function spawnRelayGauntletTraffic(context: LevelContext): void {
+  addRoutedCityVehicle(context, "Relay gauntlet fuel tanker", NORTH_TRAFFIC_LOOP, 0.9, 0, 0.58, 0.36, new THREE.Vector3(0.54, 0.44, 1.18), 0xffd66b, {
+    zoneId: "relay-gauntlet fuel traffic-bait moving-vehicles",
+    scoreValue: 320,
+    hazardKind: "combustible",
+    detail: "full"
+  });
+  addRoutedCityVehicle(context, "Relay gauntlet capacitor flatbed", CENTRAL_TRAFFIC_LOOP, 0.84, 1, 0.35, 0.32, new THREE.Vector3(0.52, 0.38, 0.98), 0x5de7ff, {
+    zoneId: "relay-gauntlet capacitor-bank moving-vehicles",
+    scoreValue: 94,
+    detail: "full"
+  });
+  addRoutedCityVehicle(context, "Relay gauntlet shuttle blocker", CITY_BELT_TRAFFIC_LOOP, 0.72, 2, 0.66, 0.38, new THREE.Vector3(0.64, 0.5, 1.2), 0x75e6ff, {
+    zoneId: "relay-gauntlet traffic-loop moving-vehicles",
+    scoreValue: 92,
+    detail: "full"
+  });
+  addRoutedCityVehicle(context, "Relay gauntlet courier spark", BATTERY_TRAFFIC_LOOP_OPPOSITE, 1.24, 1, 0.28, 0.27, new THREE.Vector3(0.36, 0.31, 0.68), 0xff8f38, {
+    zoneId: "relay-gauntlet traffic-loop moving-vehicles",
+    scoreValue: 48
+  });
+}
+
 function spawnSwitchbackArchiveCore(context: LevelContext): void {
   const buildings: BuildingSpec[] = [
     {
@@ -911,6 +1040,106 @@ function spawnSwitchbackStreetActivity(context: LevelContext): void {
   addBillboard(context, -4.65, -6.25, 0xff6b93);
   addBillboard(context, 5.6, -5.85, 0x7ee8ff);
   addBillboard(context, 6.9, 4.65, 0xffd66b);
+}
+
+function spawnOverdriveCoreRoutePaint(context: LevelContext): void {
+  for (const [label, x, z, width, depth, color, opacity] of [
+    ["Overdrive boss lens entry stripe", 5.4, -6.05, 4.4, 0.38, 0xff6b93, 0.34],
+    ["Overdrive right redirect stripe", 7.65, -2.88, 0.42, 4.95, 0xff6b93, 0.32],
+    ["Overdrive center rebound stripe", 3.1, -1.18, 5.6, 0.34, 0x93f1ff, 0.3],
+    ["Overdrive switchback spine stripe", -0.42, 1.84, 0.42, 4.5, 0x93f1ff, 0.32],
+    ["Overdrive left archive crush stripe", -4.6, 3.48, 5.2, 0.34, 0xffd66b, 0.3],
+    ["Overdrive pressure bulb cashout stripe", 3.8, 4.82, 4.6, 0.32, 0xff6b93, 0.28]
+  ] as const) {
+    addPanel(context, label, x, z, width, depth, color, opacity, CITY_GROUND_LAYER_MARKINGS + 1);
+  }
+}
+
+function spawnOverdriveCoreSetpieces(context: LevelContext): void {
+  for (const [type, label, x, z, width, height, depth, rotationY] of [
+    ["springPad", "Overdrive prism redirect pad", 6.15, -3.12, 0.98, 0.22, 0.66, -Math.PI * 0.18],
+    ["springPad", "Overdrive center rebound pad", 0.82, 1.85, 0.98, 0.22, 0.66, Math.PI * 0.16],
+    ["springPad", "Overdrive archive crush pad", -4.25, 3.36, 0.98, 0.22, 0.66, Math.PI * 0.24],
+    ["shockCanister", "Overdrive right pressure bulb", 6.95, -0.02, 0.42, 0.72, 0.42, -Math.PI * 0.5],
+    ["shockCanister", "Overdrive left pressure bulb", -5.75, 1.78, 0.42, 0.72, 0.42, Math.PI * 0.5],
+    ["transformer", "Overdrive breaker relay coupler", 2.38, 3.26, 0.58, 0.78, 0.48, -Math.PI * 0.1]
+  ] as const) {
+    addHazardRelay(context, type, label, new THREE.Vector3(x, height * 0.5, z), new THREE.Vector3(width, height, depth), rotationY);
+  }
+
+  for (const [label, materialId, x, z, width, height, depth, rotationY] of [
+    ["Overdrive glass prism shard rack", "glass", 5.35, -3.84, 0.74, 0.58, 0.44, -Math.PI * 0.16],
+    ["Overdrive foam redirect bumper", "foam", 3.35, -0.12, 1.12, 0.36, 0.58, Math.PI * 0.08],
+    ["Overdrive archive data pallet", "metal", -1.92, 2.96, 0.86, 0.5, 0.48, -Math.PI * 0.12],
+    ["Overdrive glass cascade crate", "glass", -6.42, 3.1, 0.58, 0.58, 0.5, Math.PI * 0.18],
+    ["Overdrive foam dead-stop bumper", "foam", 4.95, 3.7, 0.94, 0.36, 0.58, -Math.PI * 0.18],
+    ["Overdrive pressure cable", "rubber", 2.9, 4.0, 2.8, 0.08, 0.08, Math.PI * 0.5]
+  ] as const) {
+    addStreetCargo(context, label, materialId, new THREE.Vector3(x, height * 0.5, z), new THREE.Vector3(width, height, depth), rotationY);
+  }
+
+  addStrategicHazardBox(context, {
+    label: "Overdrive archive prism crown",
+    materialId: "glass",
+    position: new THREE.Vector3(6.48, 0.82, -4.04),
+    size: new THREE.Vector3(0.48, 1.64, 0.38),
+    zoneId: "archive-boss weak-point glass-depot explosive",
+    scoreValue: 420,
+    kind: "explosive",
+    rotationY: -Math.PI * 0.12,
+    fractureResistance: 0.12,
+    showReadableMarker: true
+  });
+  addStrategicHazardBox(context, {
+    label: "Overdrive pressure bulb cluster",
+    materialId: "glass",
+    position: new THREE.Vector3(7.08, 0.4, -3.38),
+    size: new THREE.Vector3(0.58, 0.8, 0.42),
+    zoneId: "archive-boss pressure-bulb hazard-relay explosive",
+    scoreValue: 330,
+    kind: "explosive",
+    rotationY: Math.PI * 0.08,
+    fractureResistance: 0.1,
+    showReadableMarker: true
+  });
+  addStrategicHazardBox(context, {
+    label: "Overdrive archive ballast fuse",
+    materialId: "metal",
+    position: new THREE.Vector3(4.12, 0.34, -4.1),
+    size: new THREE.Vector3(0.42, 0.68, 0.36),
+    zoneId: "archive-boss pressure-bulb power-grid",
+    scoreValue: 240,
+    kind: "electric",
+    fractureResistance: 0.16,
+    showReadableMarker: true
+  });
+
+  addBillboard(context, 5.0, -5.92, 0xff6b93);
+  addBillboard(context, -4.7, 3.92, 0x93f1ff);
+  addBillboard(context, 2.4, 4.22, 0xffd66b);
+}
+
+function spawnOverdriveCoreTraffic(context: LevelContext): void {
+  addRoutedCityVehicle(context, "Overdrive archive tanker", BATTERY_TRAFFIC_LOOP, 0.78, 0, 0.62, 0.36, new THREE.Vector3(0.54, 0.44, 1.18), 0xffd66b, {
+    zoneId: "overdrive-core fuel pressure-bulb moving-vehicles",
+    scoreValue: 300,
+    hazardKind: "combustible",
+    detail: "full"
+  });
+  addRoutedCityVehicle(context, "Overdrive prism bus", CENTRAL_TRAFFIC_LOOP, 0.72, 2, 0.48, 0.38, new THREE.Vector3(0.62, 0.5, 1.18), 0xff6b93, {
+    zoneId: "overdrive-core glass-depot moving-vehicles",
+    scoreValue: 88,
+    detail: "full"
+  });
+  addRoutedCityVehicle(context, "Overdrive archive van", CITY_BELT_TRAFFIC_LOOP, 0.88, 1, 0.42, 0.34, new THREE.Vector3(0.56, 0.44, 0.98), 0x93f1ff, {
+    zoneId: "overdrive-core switchback-service moving-vehicles",
+    scoreValue: 64,
+    detail: "full"
+  });
+  addRoutedCityVehicle(context, "Overdrive courier shard", CENTRAL_TRAFFIC_LOOP_OPPOSITE, 1.26, 3, 0.28, 0.27, new THREE.Vector3(0.36, 0.31, 0.68), 0xff8f38, {
+    zoneId: "overdrive-core switchback-service moving-vehicles",
+    scoreValue: 46
+  });
 }
 
 function spawnTargetDistrict(context: LevelContext): void {
