@@ -45,9 +45,9 @@ export function graphicsPixelRatioCap(quality: GraphicsQuality): number {
     case "performance":
       return 0.9;
     case "balanced":
-      return 1.2;
+      return 1.5;
     case "cinematic":
-      return 1.45;
+      return 1.75;
   }
 }
 

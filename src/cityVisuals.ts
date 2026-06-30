@@ -21,6 +21,7 @@ interface BuildingCellVisualOptions {
   columns: number;
   brand?: BuildingBrand;
   visualDetail?: CityVisualDetail;
+  deferStaticBatching?: boolean;
 }
 
 export interface FragmentVisualOptions {
@@ -92,7 +93,9 @@ export function decorateBuildingCell(mesh: THREE.Mesh, options: BuildingCellVisu
   const detail = performanceDetail ? "lean" : facadeDetailFor(options);
   if (options.scoreRole === "neutral") {
     decorateNeutralBuildingCell(mesh, options, palette, profile);
-    mergeOpaqueDecorativeChildrenByMaterial(mesh);
+    if (!options.deferStaticBatching) {
+      mergeOpaqueDecorativeChildrenByMaterial(mesh);
+    }
     return;
   }
   addFacadeSkin(mesh, options.size, palette.facade, FACADE_DEPTH, profile);
@@ -115,7 +118,9 @@ export function decorateBuildingCell(mesh: THREE.Mesh, options: BuildingCellVisu
   if (options.floor === options.floors - 1) {
     addRoofDetail(mesh, options, palette.roof, profile);
   }
-  mergeOpaqueDecorativeChildrenByMaterial(mesh);
+  if (!options.deferStaticBatching) {
+    mergeOpaqueDecorativeChildrenByMaterial(mesh);
+  }
 }
 
 function decorateNeutralBuildingCell(

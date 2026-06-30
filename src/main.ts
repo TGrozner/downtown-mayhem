@@ -2582,7 +2582,6 @@ class Game {
     }
 
     this.settings = settings;
-    this.adaptivePerfLevel = initialAdaptivePerformanceLevel(settings);
     this.renderer = rendererBundle.renderer;
     this.rendererBackend = rendererBundle.backend;
     this.renderer.domElement.dataset.rendererBackend = this.rendererBackend;
@@ -3142,6 +3141,16 @@ class Game {
 
   private updateAdaptivePerformance(fps: number, sampleElapsed: number): void {
     if (!Number.isFinite(fps) || fps <= 0 || this.frozenForCapture) {
+      return;
+    }
+    if (this.runState.phase === "aim") {
+      this.adaptivePerfLowElapsed = 0;
+      this.adaptivePerfRecoveryElapsed = 0;
+      this.adaptivePerfCriticalElapsed = 0;
+      if (this.adaptivePerfLevel !== 0) {
+        this.adaptivePerfLevel = 0;
+        this.applySettings();
+      }
       return;
     }
 
@@ -4308,7 +4317,7 @@ class Game {
     this.refreshAimSurfaceTargets();
     this.aimVisibleSurfaceTargets.length = 0;
     for (const target of this.aimSurfaceTargets) {
-      if (target.visible) {
+      if (target.visible || target.userData.aimRaycastProxy === true) {
         this.aimVisibleSurfaceTargets.push(target);
       }
     }
@@ -7178,22 +7187,6 @@ function moneyShotObjectPriority(
 
 function settingsStatus(settings: GameSettings): string {
   return `${GRAPHICS_QUALITY_LABELS[settings.graphicsQuality]}, WebGL renderer, ${Math.round(settings.masterVolume * 100)}% volume, ${Math.round(settings.cameraShake * 100)}% shake`;
-}
-
-function initialAdaptivePerformanceLevel(settings: GameSettings): AdaptivePerformanceLevel {
-  if (settings.graphicsQuality === "performance" || typeof navigator === "undefined") {
-    return 0;
-  }
-  const hardware = navigator as Navigator & { deviceMemory?: number };
-  const memoryGb = Number(hardware.deviceMemory ?? 0);
-  const coreCount = Number(hardware.hardwareConcurrency ?? 0);
-  if ((memoryGb > 0 && memoryGb <= 4) || (coreCount > 0 && coreCount <= 4)) {
-    return 2;
-  }
-  if ((memoryGb > 0 && memoryGb <= 6) || (coreCount > 0 && coreCount <= 6)) {
-    return 1;
-  }
-  return 0;
 }
 
 function graphicsLightingProfile(quality: GraphicsQuality): GraphicsLightingProfile {

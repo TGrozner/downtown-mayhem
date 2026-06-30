@@ -251,8 +251,15 @@ interface FrozenRubbleBucket {
 
 interface StaticDetailRecord {
   objectId: number;
+  roots: THREE.Mesh[];
   children: THREE.Mesh[];
+  detachedChildren: StaticDetailDetachedChild[];
   instances: StaticDetailInstance[];
+}
+
+interface StaticDetailDetachedChild {
+  mesh: THREE.Mesh;
+  parent: THREE.Object3D;
 }
 
 interface StaticDetailInstance {
@@ -877,7 +884,7 @@ export class PhysicsWorld {
     let batchedObjects = 0;
     let batchedParts = 0;
     for (const object of this.objects.values()) {
-      if (object.bodyType !== "fixed" || object.isDebris || object.category === "projectile" || this.staticDetailRecords.has(object.id)) {
+      if (!shouldBatchIdleDetailObject(object) || this.staticDetailRecords.has(object.id)) {
         continue;
       }
       const record = this.createStaticDetailRecord(object);
@@ -1871,17 +1878,30 @@ export class PhysicsWorld {
 
   private createStaticDetailRecord(object: PhysicsObject): StaticDetailRecord | null {
     object.mesh.updateMatrixWorld(true);
-    const record: StaticDetailRecord = { objectId: object.id, children: [], instances: [] };
-    const parts: Array<{ child: THREE.Mesh; part: FrozenRubblePart }> = [];
+    const record: StaticDetailRecord = {
+      objectId: object.id,
+      roots: [],
+      children: [],
+      detachedChildren: [],
+      instances: []
+    };
+    const parts: Array<{ mesh: THREE.Mesh; root: boolean; part: FrozenRubblePart }> = [];
+    const unbatchedVisibleChildren: THREE.Mesh[] = [];
     object.mesh.traverse((child) => {
-      if (child === object.mesh || !(child instanceof THREE.Mesh) || !child.visible || child.children.length > 0) {
+      if (child === object.mesh || !(child instanceof THREE.Mesh) || !child.visible) {
+        return;
+      }
+      if (child.children.length > 0) {
+        unbatchedVisibleChildren.push(child);
         return;
       }
       if (!isStaticDetailMeshBatchable(child)) {
+        unbatchedVisibleChildren.push(child);
         return;
       }
       parts.push({
-        child,
+        mesh: child,
+        root: false,
         part: {
           geometry: child.geometry,
           material: child.material,
@@ -1892,14 +1912,47 @@ export class PhysicsWorld {
         }
       });
     });
+    let batchRoot = false;
+    if (shouldBatchStaticRootVisual(object) && isStaticRootMeshBatchable(object.mesh)) {
+      batchRoot = true;
+      const rootMesh = object.mesh;
+      parts.unshift({
+        mesh: rootMesh,
+        root: true,
+        part: {
+          geometry: rootMesh.geometry,
+          material: rootMesh.material,
+          matrix: rootMesh.matrixWorld.clone(),
+          renderOrder: rootMesh.renderOrder,
+          castShadow: rootMesh.castShadow,
+          receiveShadow: rootMesh.receiveShadow
+        }
+      });
+    }
     if (parts.length === 0) {
       return null;
     }
 
-    for (const { child, part } of parts) {
+    if (batchRoot) {
+      const detachedSet = new Set(unbatchedVisibleChildren);
+      for (const child of unbatchedVisibleChildren) {
+        if (!child.parent || hasAncestorInSet(child, detachedSet, object.mesh)) {
+          continue;
+        }
+        record.detachedChildren.push({ mesh: child, parent: child.parent });
+        this.scene.attach(child);
+      }
+    }
+
+    for (const { mesh, root, part } of parts) {
       this.addStaticDetailInstance(record, part);
-      child.visible = false;
-      record.children.push(child);
+      mesh.visible = false;
+      if (root) {
+        mesh.userData.aimRaycastProxy = true;
+        record.roots.push(mesh);
+      } else {
+        record.children.push(mesh);
+      }
     }
     return record;
   }
@@ -1969,6 +2022,13 @@ export class PhysicsWorld {
     const record = this.staticDetailRecords.get(object.id);
     if (!record) {
       return;
+    }
+    for (const root of record.roots) {
+      root.visible = true;
+      delete root.userData.aimRaycastProxy;
+    }
+    for (const { mesh, parent } of record.detachedChildren) {
+      parent.attach(mesh);
     }
     for (const child of record.children) {
       child.visible = true;
@@ -2273,15 +2333,55 @@ function isStaticDetailMeshBatchable(mesh: THREE.Mesh): mesh is THREE.Mesh<THREE
   if (mesh.geometry.userData.sharedGeometry !== true || mesh.userData.disposeMaterial === true) {
     return false;
   }
-  if (mesh.material.transparent || isStrongEmissiveMaterial(mesh.material)) {
+  if (mesh.material.transparent && mesh.material.depthWrite === false) {
     return false;
   }
   return true;
 }
 
-function isStrongEmissiveMaterial(material: THREE.Material): boolean {
-  const maybeEmissive = material as THREE.Material & { emissive?: THREE.Color; emissiveIntensity?: number };
-  return Boolean(maybeEmissive.emissive && maybeEmissive.emissive.getHex() !== 0 && (maybeEmissive.emissiveIntensity ?? 1) > 0.08);
+function shouldBatchStaticRootVisual(object: PhysicsObject): boolean {
+  return (
+    object.bodyType === "fixed" &&
+    object.category === "structure" &&
+    object.shape === "box" &&
+    !object.isDebris &&
+    !object.visualProxy &&
+    !object.trafficRoute
+  );
+}
+
+function shouldBatchIdleDetailObject(object: PhysicsObject): boolean {
+  if (object.isDebris || object.category === "projectile") {
+    return false;
+  }
+  if (object.bodyType === "fixed") {
+    return true;
+  }
+  return false;
+}
+
+function isStaticRootMeshBatchable(mesh: THREE.Mesh): mesh is THREE.Mesh<THREE.BufferGeometry, THREE.Material> {
+  if (Array.isArray(mesh.material)) {
+    return false;
+  }
+  if (mesh.geometry.userData.sharedGeometry !== true || mesh.userData.disposeMaterial === true) {
+    return false;
+  }
+  if (mesh.material.transparent) {
+    return false;
+  }
+  return true;
+}
+
+function hasAncestorInSet(object: THREE.Object3D, ancestors: ReadonlySet<THREE.Object3D>, boundary: THREE.Object3D): boolean {
+  let parent = object.parent;
+  while (parent && parent !== boundary) {
+    if (ancestors.has(parent)) {
+      return true;
+    }
+    parent = parent.parent;
+  }
+  return false;
 }
 
 function frozenRubbleBucketKey(part: FrozenRubblePart): string {

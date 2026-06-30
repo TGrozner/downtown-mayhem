@@ -12,6 +12,7 @@ const SCORE_REVEAL_TIMEOUT_MS = 45_000;
 const LONG_TEST_TIMEOUT_MS = 180_000;
 const RUN_FULL_SIMULATION_SMOKE = process.env.RUN_FULL_SIMULATION_SMOKE === "true";
 const RUN_PERF_SMOKE = process.env.DOWNTOWN_MAYHEM_PERF_SMOKE === "true";
+const RUN_IDLE_PERF_SMOKE = process.env.DOWNTOWN_MAYHEM_IDLE_PERF_SMOKE === "true";
 const SETTINGS_STORAGE_KEY = "downtown-mayhem:settings:v1";
 const ARCADE_PROGRESS_STORAGE_KEY = "downtown-mayhem:arcade-progress";
 const SMOKE_URL = "/?smoke=1";
@@ -31,11 +32,11 @@ const STABLE_VISUAL_CAPTURE_SETTINGS = {
   showFps: false
 };
 const HAZARD_JUNCTION_RENDER_BUDGET = {
-  drawCalls: 5_050,
-  visibleMeshes: 3_225,
+  drawCalls: 3_800,
+  visibleMeshes: 3_100,
   visibleMaterials: 340,
-  programs: 32,
-  geometries: 1_475,
+  programs: 46,
+  geometries: 1_200,
   textures: 42
 };
 const PERF_SMOKE_BUDGET = {
@@ -46,6 +47,15 @@ const PERF_SMOKE_BUDGET = {
   maxPostShotTextures: 50,
   maxProgramsCreatedAfterWarmup: 2,
   maxDroppedSubsteps: 8,
+  maxVisiblePooledVfxObjects: 0
+};
+const IDLE_PERF_SMOKE_BUDGET = {
+  maxFrameMs: 150,
+  maxRenderMs: 130,
+  maxDrawCalls: 3_800,
+  maxVisibleMeshes: 3_100,
+  maxGeometries: 1_200,
+  maxTextures: 50,
   maxVisiblePooledVfxObjects: 0
 };
 
@@ -86,7 +96,7 @@ interface PerfLogPayload {
     frameCount: number;
     slowFrameCount: number;
     slowRatioPercent: number;
-    maxFrame: { totalMs: number } | null;
+    maxFrame: { totalMs: number; renderMs: number } | null;
     shotMax: { totalMs: number; droppedSubstepsInFrame: number };
     shotTotals: { droppedSubsteps: number };
   };
@@ -547,6 +557,44 @@ test("records post-shot perf budgets", async ({ page }) => {
   expect(consoleErrors).toEqual([]);
 });
 
+test("records idle aim perf budgets", async ({ page }) => {
+  test.skip(!RUN_IDLE_PERF_SMOKE, "Set DOWNTOWN_MAYHEM_IDLE_PERF_SMOKE=true to run the idle perf smoke.");
+  test.setTimeout(LONG_TEST_TIMEOUT_MS);
+  const consoleErrors = trackRuntimeErrors(page);
+  await rm(perfLogDir(), { force: true, recursive: true });
+
+  await useSmokePerformanceSettings(page);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto(PERF_SMOKE_URL);
+  await clickUi(page.locator("[data-action='start-arcade']").first());
+  await expectLevelReady(page, "Hazard Junction");
+  await expectRenderableCanvas(page);
+  await waitForRenderWarmupReady(page);
+  await waitForCannonVisualReady(page);
+  await expect(page.locator(".hud [data-role='shots']")).toHaveText("READY");
+  await expect(page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getPerfReport())).resolves.toMatchObject({
+    enabled: true
+  });
+  await expect.poll(() => page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getRenderStats().visiblePooledVfxObjects ?? -1)).toBe(0);
+
+  await page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.clearPerfReport());
+  await expect
+    .poll(() => page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getPerfReport() as { frameCount?: number } | undefined), {
+      timeout: UI_READY_TIMEOUT_MS
+    })
+    .toMatchObject({ frameCount: expect.any(Number) });
+  await expect
+    .poll(() => page.evaluate(() => (window.__DOWNTOWN_MAYHEM_DEBUG__?.getPerfReport() as { frameCount?: number } | undefined)?.frameCount ?? 0), {
+      timeout: LEVEL_START_TIMEOUT_MS
+    })
+    .toBeGreaterThanOrEqual(12);
+  await page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.flushPerfLog("perf-smoke-idle-aim"));
+
+  const payload = await waitForPerfLog("perf-smoke-idle-aim");
+  expectIdlePerfBudget(payload);
+  expect(consoleErrors).toEqual([]);
+});
+
 function expectPerfBudget(payload: PerfLogPayload): void {
   expect(payload.href).toContain("perfFull");
   expect(payload.summary.frameCount).toBeGreaterThan(0);
@@ -561,6 +609,20 @@ function expectPerfBudget(payload: PerfLogPayload): void {
   expect(payload.report?.counterTotals["renderer.programsCreatedAfterWarmup"] ?? 0).toBeLessThanOrEqual(
     PERF_SMOKE_BUDGET.maxProgramsCreatedAfterWarmup
   );
+}
+
+function expectIdlePerfBudget(payload: PerfLogPayload): void {
+  expect(payload.href).toContain("perfFull");
+  expect(payload.reason).toBe("perf-smoke-idle-aim");
+  expect(payload.warmup.phase).toBe("ready");
+  expect(payload.summary.frameCount).toBeGreaterThanOrEqual(12);
+  expect(payload.summary.maxFrame?.totalMs ?? 0).toBeLessThanOrEqual(IDLE_PERF_SMOKE_BUDGET.maxFrameMs);
+  expect(payload.summary.maxFrame?.renderMs ?? 0).toBeLessThanOrEqual(IDLE_PERF_SMOKE_BUDGET.maxRenderMs);
+  expect(payload.stats.drawCalls).toBeLessThanOrEqual(IDLE_PERF_SMOKE_BUDGET.maxDrawCalls);
+  expect(payload.stats.visibleMeshes).toBeLessThanOrEqual(IDLE_PERF_SMOKE_BUDGET.maxVisibleMeshes);
+  expect(payload.stats.geometries).toBeLessThanOrEqual(IDLE_PERF_SMOKE_BUDGET.maxGeometries);
+  expect(payload.stats.textures).toBeLessThanOrEqual(IDLE_PERF_SMOKE_BUDGET.maxTextures);
+  expect(payload.stats.visiblePooledVfxObjects).toBeLessThanOrEqual(IDLE_PERF_SMOKE_BUDGET.maxVisiblePooledVfxObjects);
 }
 
 test("persists real settings and applies the FPS toggle after reload", async ({ page }) => {

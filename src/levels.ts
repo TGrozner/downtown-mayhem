@@ -5834,6 +5834,7 @@ function spawnBuildingStack(context: LevelContext, spec: BuildingSpec): void {
         style: spec.style,
         brand: spec.brand,
         visualDetail: context.visualDetail,
+        deferStaticBatching: !isRagdollStructure,
         floor: floor + groupFloors - 1,
         column,
         floors: spec.floors,
