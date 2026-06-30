@@ -3,8 +3,11 @@ import * as THREE from "three";
 import type { ArcadeMissionFields } from "../../src/levels";
 import type { ScoreBreakdown, ScoreEvent } from "../../src/scoring";
 import {
+  DAILY_RESULTS_STORAGE_KEY,
   dailyContractForDate,
+  loadDailyResult,
   mayhemContractForRun,
+  recordDailyResult,
   replayMomentFromEvents,
   runFeedbackForScore,
   runVariantForSeed,
@@ -74,7 +77,114 @@ describe("mayhem feature helpers", () => {
     });
   });
 
-  test("returns useful retry feedback for near misses", () => {
+  test("records daily best results without overwriting them with weaker runs", () => {
+    const levels = [{ id: "hazard-junction", mission: MISSION }];
+    const daily = dailyContractForDate(levels, new Date("2026-06-30T22:30:00.000Z"));
+    const storage = memoryStorage();
+
+    expect(daily).not.toBeNull();
+    if (!daily) {
+      return;
+    }
+
+    const first = recordDailyResult(
+      daily,
+      {
+        score: score({ totalScore: 150_000, mayhemRating: "DISTRICT WRECKER" }),
+        stars: 2,
+        contractCompleted: false,
+        levelName: "Hazard Junction",
+        projectileLabel: "Frag"
+      },
+      storage
+    );
+    const second = recordDailyResult(
+      daily,
+      {
+        score: score({ totalScore: 120_000, mayhemRating: "SPARK SHOW" }),
+        stars: 1,
+        contractCompleted: true,
+        levelName: "Hazard Junction",
+        projectileLabel: "Frag"
+      },
+      storage
+    );
+
+    expect(first).toMatchObject({
+      attempts: 1,
+      previousBestScore: 0,
+      bestScore: 150_000,
+      bestStars: 2,
+      newBest: true,
+      starsGained: 2
+    });
+    expect(first.shareText).toContain("Downtown Mayhem Daily 2026-06-30 / 150,000 Mayhem / 2/3 stars");
+    expect(second).toMatchObject({
+      attempts: 2,
+      previousBestScore: 150_000,
+      bestScore: 150_000,
+      bestStars: 2,
+      newBest: false,
+      contractCompleted: true
+    });
+    expect(loadDailyResult(daily, storage)).toMatchObject({
+      attempts: 2,
+      bestScore: 150_000,
+      bestStars: 2,
+      bestContractCompleted: true
+    });
+    expect(JSON.parse(storage.getItem(DAILY_RESULTS_STORAGE_KEY) ?? "{}")).toMatchObject({
+      version: 1
+    });
+  });
+
+  test("keeps daily best entries isolated by contract identity and handles blocked storage", () => {
+    const levels = [{ id: "hazard-junction", mission: MISSION }];
+    const first = dailyContractForDate(levels, new Date("2026-06-30T22:30:00.000Z"));
+    const second = dailyContractForDate(levels, new Date("2026-07-01T22:30:00.000Z"));
+    const storage = memoryStorage();
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    if (!first || !second) {
+      return;
+    }
+
+    recordDailyResult(
+      first,
+      {
+        score: score({ totalScore: 111_000 }),
+        stars: 1,
+        contractCompleted: false,
+        levelName: "Hazard Junction",
+        projectileLabel: "Normal"
+      },
+      storage
+    );
+
+    expect(loadDailyResult(first, storage)?.bestScore).toBe(111_000);
+    expect(loadDailyResult(second, storage)).toBeNull();
+    expect(loadDailyResult(first, null)).toBeNull();
+    expect(
+      recordDailyResult(
+        first,
+        {
+          score: score({ totalScore: 222_000 }),
+          stars: 3,
+          contractCompleted: true,
+          levelName: "Hazard Junction",
+          projectileLabel: "Normal"
+        },
+        throwingStorage()
+      )
+    ).toMatchObject({
+      attempts: 1,
+      bestScore: 222_000,
+      newBest: true
+    });
+  });
+
+  test("returns actionable retry feedback for near misses", () => {
     const variant = runVariantForSeed("hazard-junction", 12345);
     const contract = mayhemContractForRun("hazard-junction", MISSION, "pulse", variant);
     const feedback = runFeedbackForScore({
@@ -93,11 +203,13 @@ describe("mayhem feature helpers", () => {
 
     expect(feedback.nearMisses).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("more Mayhem"),
-        expect.stringContaining("object damage short"),
-        expect.stringContaining("Bonus objective short")
+        expect.stringContaining("Retry route:"),
+        expect.stringContaining("Aim plan:"),
+        expect.stringContaining("Bonus route:")
       ])
     );
+    expect(feedback.nearMisses[0]).toContain("Impulse Orb");
+    expect(feedback.nearMisses[1]).toContain("target core");
     expect(feedback.projectileObjective?.id).toBe("pulse-chaos-wave");
   });
 });
@@ -127,5 +239,26 @@ function score(overrides: Partial<ScoreBreakdown> = {}): ScoreBreakdown {
     chainReactionCount: 0,
     maxChainCombo: 0,
     ...overrides
+  };
+}
+
+function memoryStorage(): Pick<Storage, "getItem" | "setItem"> {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value);
+    }
+  };
+}
+
+function throwingStorage(): Pick<Storage, "getItem" | "setItem"> {
+  return {
+    getItem: () => {
+      throw new Error("blocked");
+    },
+    setItem: () => {
+      throw new Error("full");
+    }
   };
 }

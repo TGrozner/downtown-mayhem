@@ -1,6 +1,6 @@
 import type { ArcadeContractObjectiveResult, ArcadeLevelProgress, ArcadeResult } from "./arcade";
 import type { ArcadeMissionFields } from "./levels";
-import type { RunFeedback } from "./mayhemFeatures";
+import type { DailyResultMeta, RunFeedback } from "./mayhemFeatures";
 import type { ProjectileDefinition, ProjectileId } from "./projectile";
 import { PROJECTILE_ORDER, PROJECTILES } from "./projectile";
 import type { ScoreBreakdown } from "./scoring";
@@ -15,6 +15,7 @@ export interface UIResultMeta {
   previousStars: number;
   newBest: boolean;
   starsGained: number;
+  dailyResult?: DailyResultMeta;
   justUnlockedLevelName?: string;
 }
 
@@ -50,6 +51,7 @@ interface UIState {
   arcadeResult: ArcadeResult | null;
   resultMeta: UIResultMeta | null;
   runFeedback: RunFeedback | null;
+  loadoutLocked: boolean;
   settings: GameSettings;
   status: string;
   fps: number;
@@ -444,6 +446,13 @@ export class GameUI {
       }
       this.activeProjectileId = state.projectileId;
     }
+    for (const [id, button] of this.projectileButtons) {
+      const locked = state.loadoutLocked;
+      button.disabled = locked;
+      button.title = locked
+        ? "Daily Contract locks today's payload."
+        : `${PROJECTILES[id].key}: ${PROJECTILES[id].name} - ${PROJECTILES[id].role}. ${PROJECTILES[id].description}`;
+    }
 
     const homeKey = homeRenderKey(state);
     if (this.renderedHomeKey !== homeKey) {
@@ -744,6 +753,7 @@ function renderScore(state: UIState): string {
       <strong data-role="result-total">${formatScoreNumber(score.totalScore)}</strong>
       <em>${bestScoreLabel(state)}</em>
     </div>
+    ${state.resultMeta?.dailyResult ? renderDailyResultSummary(state.resultMeta.dailyResult) : ""}
     ${state.runFeedback ? renderRunCoach(state.runFeedback) : ""}
     <div class="hud__objective-list">
       ${goals
@@ -830,6 +840,13 @@ function resultCallouts(state: UIState, score: ScoreBreakdown): Array<{ classNam
       value: `+${meta.starsGained}`
     });
   }
+  if (meta?.dailyResult) {
+    callouts.push({
+      className: meta.dailyResult.newBest ? "is-daily-best" : "is-daily",
+      label: meta.dailyResult.newBest ? "Daily best" : "Daily run",
+      value: `${formatScoreNumber(meta.dailyResult.bestScore)} / ${meta.dailyResult.bestStars}/3`
+    });
+  }
   if (meta?.justUnlockedLevelName) {
     callouts.push({
       className: "is-unlock",
@@ -904,6 +921,35 @@ function renderRunCoach(feedback: RunFeedback): string {
           <strong>${feedback.replayMoment ? `${escapeHtml(feedback.replayMoment.label)} / ${formatScoreNumber(feedback.replayMoment.points)}` : "No signature moment yet"}</strong>
         </div>
       </div>
+    </div>
+  `;
+}
+
+function renderDailyResultSummary(result: DailyResultMeta): string {
+  const bestLabel = result.newBest
+    ? `New daily best from ${formatScoreNumber(result.previousBestScore)}`
+    : `Daily best ${formatScoreNumber(result.bestScore)}`;
+  return `
+    <div class="hud__daily-result" data-role="daily-result">
+      <div class="hud__daily-result-head">
+        <span>Daily Contract</span>
+        <strong>${escapeHtml(bestLabel)}</strong>
+      </div>
+      <div class="hud__daily-result-grid">
+        <div>
+          <span>Attempts</span>
+          <strong>${formatScoreNumber(result.attempts)}</strong>
+        </div>
+        <div>
+          <span>Best stars</span>
+          <strong>${result.bestStars}/3</strong>
+        </div>
+        <div>
+          <span>Contract</span>
+          <strong>${result.contractCompleted ? "Complete" : "Missed"}</strong>
+        </div>
+      </div>
+      <code data-role="daily-share">${escapeHtml(result.shareText)}</code>
     </div>
   `;
 }
@@ -1806,6 +1852,12 @@ function installStyles(): void {
       background: rgba(114, 240, 165, 0.1);
     }
 
+    .hud__result-callouts .is-daily,
+    .hud__result-callouts .is-daily-best {
+      border-color: rgba(255, 226, 126, 0.62);
+      background: rgba(255, 202, 76, 0.12);
+    }
+
     .hud__result-callouts .is-contract-missed {
       border-color: rgba(255, 124, 159, 0.54);
       background: rgba(255, 124, 159, 0.1);
@@ -1868,6 +1920,7 @@ function installStyles(): void {
       font-style: normal;
     }
 
+    .hud__daily-result,
     .hud__run-coach,
     .hud__objective-list,
     .hud__contract-list,
@@ -1877,6 +1930,8 @@ function installStyles(): void {
       gap: 6px;
     }
 
+    .hud__daily-result-head,
+    .hud__daily-result-grid div,
     .hud__run-coach-head,
     .hud__run-coach-grid div,
     .hud__objective-list div,
@@ -1916,11 +1971,25 @@ function installStyles(): void {
       background: rgba(121, 240, 255, 0.055);
     }
 
+    .hud__daily-result {
+      padding: 8px;
+      border: 1px solid rgba(255, 207, 105, 0.22);
+      border-radius: 7px;
+      background: rgba(255, 207, 105, 0.07);
+    }
+
+    .hud__daily-result-head {
+      min-height: 28px;
+      background: rgba(255, 207, 105, 0.1);
+    }
+
     .hud__run-coach-head {
       min-height: 28px;
       background: rgba(121, 240, 255, 0.08);
     }
 
+    .hud__daily-result-head span,
+    .hud__daily-result-grid span,
     .hud__run-coach-head span,
     .hud__run-coach-grid span {
       color: #9db6c4;
@@ -1929,9 +1998,21 @@ function installStyles(): void {
       text-transform: uppercase;
     }
 
+    .hud__daily-result-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+    }
+
     .hud__run-coach-grid {
       display: grid;
       gap: 6px;
+    }
+
+    .hud__daily-result-grid div {
+      display: grid;
+      align-content: start;
+      gap: 2px;
     }
 
     .hud__run-coach-grid div {
@@ -1940,12 +2021,26 @@ function installStyles(): void {
       align-items: start;
     }
 
+    .hud__daily-result strong,
     .hud__run-coach strong {
       min-width: 0;
       overflow-wrap: anywhere;
       color: #ffffff;
       font-size: 12px;
       line-height: 1.25;
+    }
+
+    .hud__daily-result code {
+      display: block;
+      min-width: 0;
+      padding: 7px 8px;
+      border-radius: 6px;
+      color: #ffe08b;
+      background: rgba(0, 0, 0, 0.22);
+      font: 800 11px/1.35 var(--hud-font);
+      white-space: normal;
+      overflow-wrap: anywhere;
+      user-select: text;
     }
 
     .hud__contract-head {

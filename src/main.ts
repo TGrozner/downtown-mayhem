@@ -20,7 +20,9 @@ import { TEST_CHAMBERS, type TestChamber } from "./levels";
 import {
   chainMilestoneForCombo,
   dailyContractForDate,
+  loadDailyResult,
   mayhemContractForRun,
+  recordDailyResult,
   replayMomentFromEvents,
   runFeedbackForScore,
   runVariantForSeed,
@@ -1338,7 +1340,20 @@ class AppShell {
     const unlockedCount = Math.max(0, Math.min(TEST_CHAMBERS.length, this.progress.highestUnlockedLevel + 1));
     this.dailyContract = dailyContractForDate(TEST_CHAMBERS.slice(0, unlockedCount));
     const daily = this.dailyContract;
-    const key = daily ? [daily.dateKey, daily.levelIndex, daily.projectileId, daily.variant.id, daily.contract.id].join("|") : "none";
+    const dailyBest = daily ? loadDailyResult(daily) : null;
+    const key = daily
+      ? [
+          daily.dateKey,
+          daily.levelIndex,
+          daily.projectileId,
+          daily.variant.id,
+          daily.contract.id,
+          dailyBest?.attempts ?? 0,
+          dailyBest?.bestScore ?? 0,
+          dailyBest?.bestStars ?? 0,
+          dailyBest?.bestContractCompleted ? 1 : 0
+        ].join("|")
+      : "none";
     if (this.renderedDailyKey === key) {
       return;
     }
@@ -1349,11 +1364,15 @@ class AppShell {
     }
     const level = TEST_CHAMBERS[daily.levelIndex];
     const projectile = PROJECTILES[daily.projectileId];
+    const bestLine = dailyBest
+      ? `Best ${formatShellScore(dailyBest.bestScore)} / ${dailyBest.bestStars}/3 stars / ${dailyBest.attempts} attempts`
+      : "No daily score yet";
     this.dailyValue.innerHTML = `
       <button type="button" data-action="start-daily">
         <span>Daily Contract / ${escapeShellHtml(daily.dateKey)}</span>
         <strong>${escapeShellHtml(level.name)}</strong>
         <em>${escapeShellHtml(projectile.shortName)} / ${escapeShellHtml(daily.contract.label)} / ${escapeShellHtml(daily.contract.summary)}</em>
+        <small>${escapeShellHtml(bestLine)}</small>
       </button>
     `;
   }
@@ -1557,6 +1576,7 @@ function installAppShellStyles(): void {
     .app-shell__intro > span,
     .app-shell__daily span,
     .app-shell__daily em,
+    .app-shell__daily small,
     .app-shell__level-card span,
     .app-shell__level-card small,
     .app-shell__settings-panel > span,
@@ -1676,6 +1696,13 @@ function installAppShellStyles(): void {
       color: #b8ccd6;
       font-size: 12px;
       font-style: normal;
+      line-height: 1.25;
+    }
+
+    .app-shell__daily small {
+      color: #ffe08b;
+      font-size: 12px;
+      font-weight: 900;
       line-height: 1.25;
     }
 
@@ -2685,6 +2712,7 @@ class Game {
       arcadeResult: this.arcadeResult,
       resultMeta: this.arcadeResultMeta,
       runFeedback: this.runFeedback,
+      loadoutLocked: Boolean(this.activeDailyContract()),
       settings: this.settings,
       status: this.status,
       fps: this.displayedFps,
@@ -4064,6 +4092,16 @@ class Game {
     });
     this.arcadeProgress = recorded.progress;
     this.arcadeResult = recorded.result;
+    const daily = this.activeDailyContract();
+    const dailyResult = daily
+      ? recordDailyResult(daily, {
+          score,
+          stars: recorded.result.stars,
+          contractCompleted: Boolean(recorded.result.contract?.completed),
+          levelName: level.name,
+          projectileLabel: PROJECTILES[daily.projectileId].shortName
+        })
+      : undefined;
     this.runFeedback = runFeedbackForScore({
       score,
       mission: level.mission,
@@ -4080,6 +4118,7 @@ class Game {
       previousStars,
       newBest,
       starsGained: Math.max(0, recorded.result.stars - previousStars),
+      dailyResult,
       justUnlockedLevelName:
         recorded.progress.highestUnlockedLevel > previousHighestUnlockedLevel
           ? TEST_CHAMBERS[recorded.progress.highestUnlockedLevel]?.name
@@ -5133,6 +5172,11 @@ class Game {
     if (this.ui.isGameplayBlocked() || this.levelReloadInProgress) {
       return;
     }
+    if (this.activeDailyContract()) {
+      this.status = "Daily Contract locks today's payload.";
+      this.audio.playUiReject();
+      return;
+    }
     if (!this.runState.shotAvailable || this.runState.phase !== "aim") {
       this.status = "Reset before changing projectile.";
       this.audio.playUiReject();
@@ -5143,6 +5187,14 @@ class Game {
     this.refreshRunPlanning();
     this.audio.playLoadoutPreview(id, this.powerScale, this.sizeScale);
     this.status = `${PROJECTILES[id].name}: ${PROJECTILES[id].description}`;
+  }
+
+  private activeDailyContract(): DailyContractDefinition | null {
+    const daily = this.options.dailyContract;
+    if (!daily || daily.levelId !== this.currentLevel().id) {
+      return null;
+    }
+    return daily;
   }
 
   private updateSettings(patch: Partial<GameSettings>): void {

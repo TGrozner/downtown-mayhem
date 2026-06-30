@@ -254,6 +254,44 @@ test("starts the local daily contract as a cannon trial", async ({ page }) => {
     levelId: "hazard-junction",
     projectileId: expect.any(String)
   });
+  await expect(page.locator(".hud__projectile").first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Heavy" })).toBeDisabled();
+  expect(consoleErrors).toEqual([]);
+});
+
+test("records a local daily best and shows a shareable result summary", async ({ page }) => {
+  test.skip(!RUN_FULL_SIMULATION_SMOKE, "Set RUN_FULL_SIMULATION_SMOKE=true to run the full daily score flow.");
+  test.setTimeout(LONG_TEST_TIMEOUT_MS);
+  const consoleErrors = trackRuntimeErrors(page);
+
+  await useSmokePerformanceSettings(page);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto(SMOKE_URL);
+  await clickUi(page.locator("[data-action='start-daily']"));
+  await expectRenderableCanvas(page);
+  const daily = await page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getDailyContract() ?? null) as {
+    dateKey: string;
+    projectileId: "slug" | "scatter" | "pulse" | "gravity";
+  };
+  const shotNames = {
+    slug: "Normal Shell",
+    scatter: "Fragmentation Cluster",
+    pulse: "Impulse Orb",
+    gravity: "Heavy Penetrator"
+  };
+
+  await clickUi(fireButton(page));
+  const finishRunButton = page.locator("[data-action='finish-run']");
+  await expect(finishRunButton).toBeVisible({ timeout: SCORE_REVEAL_TIMEOUT_MS });
+  await clickUi(finishRunButton);
+  await expectFinalScore(page, shotNames[daily.projectileId]);
+  const scorePanel = page.locator(".hud [data-role='score']");
+  await expect(scorePanel.locator("[data-role='daily-result']")).toContainText("Daily Contract");
+  await expect(scorePanel.locator("[data-role='daily-result']")).toContainText(/New daily best|Daily best/);
+  await expect(scorePanel.locator("[data-role='daily-share']")).toContainText(`Downtown Mayhem Daily ${daily.dateKey}`);
+
+  await clickUi(page.locator("[data-action='result-menu']"));
+  await expect(page.locator("[data-action='start-daily']")).toContainText("Best");
   expect(consoleErrors).toEqual([]);
 });
 

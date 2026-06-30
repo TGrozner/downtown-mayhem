@@ -1,7 +1,10 @@
-import type { ArcadeContractObjective, ArcadeContractResult } from "./arcade";
+import type { ArcadeContractObjective, ArcadeContractResult, ArcadeStars } from "./arcade";
 import type { ArcadeMissionFields } from "./levels";
 import type { ProjectileId } from "./projectile";
 import type { ScoreBreakdown, ScoreEvent } from "./scoring";
+
+export const DAILY_RESULTS_STORAGE_KEY = "downtown-mayhem:daily-results";
+const DAILY_RESULTS_VERSION = 1;
 
 export interface RunVariant {
   id: string;
@@ -56,9 +59,41 @@ export interface DailyContractDefinition {
   contract: MayhemContract;
 }
 
+export interface DailyResultEntry {
+  dateKey: string;
+  levelId: string;
+  projectileId: ProjectileId;
+  contractId: string;
+  attempts: number;
+  bestScore: number;
+  bestStars: ArcadeStars;
+  bestContractCompleted: boolean;
+  bestRating: string;
+}
+
+export interface DailyResultMeta {
+  dateKey: string;
+  attempts: number;
+  previousBestScore: number;
+  previousBestStars: ArcadeStars;
+  bestScore: number;
+  bestStars: ArcadeStars;
+  newBest: boolean;
+  starsGained: number;
+  contractCompleted: boolean;
+  shareText: string;
+}
+
 interface DailyContractLevel {
   id: string;
   mission: ArcadeMissionFields;
+}
+
+type DailyResultStorage = Pick<Storage, "getItem" | "setItem">;
+
+interface DailyResultsState {
+  version: number;
+  entries: Record<string, DailyResultEntry>;
 }
 
 const DAILY_PROJECTILE_ORDER: readonly ProjectileId[] = ["slug", "scatter", "pulse", "gravity"];
@@ -125,6 +160,90 @@ export function dailyContractForDate(
     variant,
     contract: mayhemContractForRun(level.id, level.mission, projectileId, variant)
   };
+}
+
+export function loadDailyResult(
+  contract: DailyContractDefinition,
+  storage: DailyResultStorage | null = getLocalStorage()
+): DailyResultEntry | null {
+  return loadDailyResults(storage).entries[dailyResultKey(contract)] ?? null;
+}
+
+export function recordDailyResult(
+  contract: DailyContractDefinition,
+  options: {
+    score: ScoreBreakdown;
+    stars: ArcadeStars;
+    contractCompleted: boolean;
+    levelName: string;
+    projectileLabel: string;
+  },
+  storage: DailyResultStorage | null = getLocalStorage()
+): DailyResultMeta {
+  const state = loadDailyResults(storage);
+  const key = dailyResultKey(contract);
+  const previous = state.entries[key] ?? createEmptyDailyResult(contract);
+  const newBest = previous.attempts === 0 || options.score.totalScore > previous.bestScore;
+  const bestStars = maxStars(previous.bestStars, options.stars);
+  const bestScore = Math.max(previous.bestScore, options.score.totalScore);
+  const next: DailyResultEntry = {
+    ...previous,
+    attempts: previous.attempts + 1,
+    bestScore,
+    bestStars,
+    bestContractCompleted: previous.bestContractCompleted || options.contractCompleted,
+    bestRating: newBest ? options.score.mayhemRating : previous.bestRating
+  };
+  saveDailyResults(
+    {
+      version: DAILY_RESULTS_VERSION,
+      entries: {
+        ...state.entries,
+        [key]: next
+      }
+    },
+    storage
+  );
+
+  return {
+    dateKey: contract.dateKey,
+    attempts: next.attempts,
+    previousBestScore: previous.bestScore,
+    previousBestStars: previous.bestStars,
+    bestScore: next.bestScore,
+    bestStars: next.bestStars,
+    newBest,
+    starsGained: Math.max(0, options.stars - previous.bestStars),
+    contractCompleted: options.contractCompleted,
+    shareText: dailyResultShareText(contract, {
+      levelName: options.levelName,
+      projectileLabel: options.projectileLabel,
+      score: options.score,
+      stars: options.stars,
+      contractCompleted: options.contractCompleted
+    })
+  };
+}
+
+export function dailyResultShareText(
+  contract: DailyContractDefinition,
+  options: {
+    levelName: string;
+    projectileLabel: string;
+    score: ScoreBreakdown;
+    stars: ArcadeStars;
+    contractCompleted: boolean;
+  }
+): string {
+  const contractState = options.contractCompleted ? "contract complete" : "contract missed";
+  return [
+    `Downtown Mayhem Daily ${contract.dateKey}`,
+    `${formatScore(options.score.totalScore)} Mayhem`,
+    `${options.stars}/3 stars`,
+    options.levelName,
+    options.projectileLabel,
+    contractState
+  ].join(" / ");
 }
 
 export function projectileObjectiveFor(projectileId: ProjectileId, mission: ArcadeMissionFields): ProjectileObjective {
@@ -211,7 +330,7 @@ export function runFeedbackForScore(options: {
 }): RunFeedback {
   return {
     topSources: options.topSources,
-    nearMisses: nearMissHints(options.score, options.mission, options.contractResult),
+    nearMisses: nearMissHints(options.score, options.mission, options.contractResult, options.projectileId, options.variant),
     replayMoment: options.replayMoment,
     projectileObjective: projectileObjectiveFor(options.projectileId, options.mission),
     variant: options.variant,
@@ -356,25 +475,208 @@ function metricContractCopy(metric: ArcadeContractObjective["metric"], minimum: 
 function nearMissHints(
   score: ScoreBreakdown,
   mission: ArcadeMissionFields,
-  contractResult: ArcadeContractResult | null
+  contractResult: ArcadeContractResult | null,
+  projectileId: ProjectileId,
+  variant: RunVariant
 ): string[] {
   const hints: string[] = [];
   if (score.totalScore < mission.scoreThresholds.twoStar) {
-    hints.push(`Need ${(mission.scoreThresholds.twoStar - score.totalScore).toLocaleString("en-US")} more Mayhem for unlock.`);
+    hints.push(`Retry route: ${variantRetryRoute(variant, projectileId)} for ${(mission.scoreThresholds.twoStar - score.totalScore).toLocaleString("en-US")} more Mayhem.`);
   }
   if (score.targetDamage < mission.targetDamageThreshold) {
-    hints.push(`Aim closer to target structures: ${(mission.targetDamageThreshold - score.targetDamage).toLocaleString("en-US")} object damage short.`);
+    hints.push(`Aim plan: start on the target core, then let debris carry ${formatScore(mission.targetDamageThreshold - score.targetDamage)} more object damage.`);
   }
   if (score[mission.bonusThreshold.metric] < mission.bonusThreshold.minimum) {
-    hints.push(`Bonus objective short by ${(mission.bonusThreshold.minimum - score[mission.bonusThreshold.metric]).toLocaleString("en-US")}.`);
+    hints.push(`Bonus route: chase ${metricRetryPlan(mission.bonusThreshold.metric)} for ${formatScore(mission.bonusThreshold.minimum - score[mission.bonusThreshold.metric])} more.`);
   }
   for (const objective of contractResult?.objectives ?? []) {
     if (!objective.completed && typeof objective.value === "number" && typeof objective.target === "number") {
-      hints.push(`${objective.label}: ${(objective.target - objective.value).toLocaleString("en-US")} short.`);
+      hints.push(`${objective.label}: use ${variantRetryRoute(variant, projectileId)} to cover ${formatScore(objective.target - objective.value)} more.`);
       break;
     }
   }
   return hints.slice(0, 3);
+}
+
+function loadDailyResults(storage: DailyResultStorage | null): DailyResultsState {
+  if (!storage) {
+    return createEmptyDailyResults();
+  }
+  try {
+    const raw = storage.getItem(DAILY_RESULTS_STORAGE_KEY);
+    if (!raw) {
+      return createEmptyDailyResults();
+    }
+    return normalizeDailyResults(JSON.parse(raw));
+  } catch {
+    return createEmptyDailyResults();
+  }
+}
+
+function saveDailyResults(state: DailyResultsState, storage: DailyResultStorage | null): boolean {
+  if (!storage) {
+    return false;
+  }
+  try {
+    storage.setItem(DAILY_RESULTS_STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDailyResults(value: unknown): DailyResultsState {
+  if (!value || typeof value !== "object") {
+    return createEmptyDailyResults();
+  }
+  const raw = value as Partial<DailyResultsState>;
+  const entries: Record<string, DailyResultEntry> = {};
+  if (raw.entries && typeof raw.entries === "object") {
+    for (const [key, entry] of Object.entries(raw.entries)) {
+      const normalized = normalizeDailyResultEntry(entry);
+      if (normalized) {
+        entries[key] = normalized;
+      }
+    }
+  }
+  return {
+    version: DAILY_RESULTS_VERSION,
+    entries
+  };
+}
+
+function normalizeDailyResultEntry(value: unknown): DailyResultEntry | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Partial<DailyResultEntry>;
+  if (
+    typeof raw.dateKey !== "string" ||
+    typeof raw.levelId !== "string" ||
+    typeof raw.projectileId !== "string" ||
+    typeof raw.contractId !== "string"
+  ) {
+    return null;
+  }
+  return {
+    dateKey: raw.dateKey,
+    levelId: raw.levelId,
+    projectileId: raw.projectileId as ProjectileId,
+    contractId: raw.contractId,
+    attempts: clampWholeNumber(raw.attempts),
+    bestScore: clampWholeNumber(raw.bestScore),
+    bestStars: normalizeStars(raw.bestStars),
+    bestContractCompleted: Boolean(raw.bestContractCompleted),
+    bestRating: typeof raw.bestRating === "string" ? raw.bestRating : ""
+  };
+}
+
+function createEmptyDailyResults(): DailyResultsState {
+  return {
+    version: DAILY_RESULTS_VERSION,
+    entries: {}
+  };
+}
+
+function createEmptyDailyResult(contract: DailyContractDefinition): DailyResultEntry {
+  return {
+    dateKey: contract.dateKey,
+    levelId: contract.levelId,
+    projectileId: contract.projectileId,
+    contractId: contract.contract.id,
+    attempts: 0,
+    bestScore: 0,
+    bestStars: 0,
+    bestContractCompleted: false,
+    bestRating: ""
+  };
+}
+
+function dailyResultKey(contract: DailyContractDefinition): string {
+  return `${contract.dateKey}:${contract.levelId}:${contract.projectileId}:${contract.contract.id}`;
+}
+
+function maxStars(first: ArcadeStars, second: ArcadeStars): ArcadeStars {
+  return normalizeStars(Math.max(first, second));
+}
+
+function normalizeStars(value: unknown): ArcadeStars {
+  const stars = typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : 0;
+  if (stars >= 3) {
+    return 3;
+  }
+  if (stars >= 2) {
+    return 2;
+  }
+  if (stars >= 1) {
+    return 1;
+  }
+  return 0;
+}
+
+function clampWholeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function variantRetryRoute(variant: RunVariant, projectileId: ProjectileId): string {
+  if (projectileId === "scatter") {
+    return "seed Frag clusters through vehicles and relays";
+  }
+  if (projectileId === "pulse") {
+    return "land the Impulse Orb between dense blocks and traffic";
+  }
+  if (projectileId === "gravity") {
+    return "line the Heavy shot through the thickest structure row";
+  }
+  if (projectileId === "ignite") {
+    return "ignite hazards that can spread into relay chains";
+  }
+  if (variant.id === "rush-hour") {
+    return "hit the busiest lane before traffic clears";
+  }
+  if (variant.id === "relay-storm") {
+    return "open on a transformer or relay tower";
+  }
+  if (variant.id === "heavy-salvage") {
+    return "aim deeper into the main target mass";
+  }
+  if (variant.id === "glass-rush") {
+    return "drive the blast across brittle glass clusters";
+  }
+  return "start from a volatile setpiece";
+}
+
+function metricRetryPlan(metric: ArcadeContractObjective["metric"]): string {
+  switch (metric) {
+    case "chainReactionCount":
+      return "secondary hits from vehicles, relays, and loose cargo";
+    case "collateralChaos":
+      return "collateral chaos through traffic lanes and fragile props";
+    case "targetDamage":
+      return "direct object damage on the named target";
+    case "totalScore":
+      return "a higher-scoring opening route";
+    case "chainReactionBonus":
+      return "chain bonus by keeping impacts close together";
+    case "remainingDebrisMotion":
+      return "more moving debris before the score locks";
+    case "maxChainCombo":
+      return "one longer unbroken combo";
+    case "projectile":
+      return "the required payload";
+  }
+}
+
+function formatScore(value: number): string {
+  return Math.max(0, Math.round(value)).toLocaleString("en-US");
+}
+
+function getLocalStorage(): DailyResultStorage | null {
+  try {
+    return typeof window !== "undefined" ? window.localStorage : null;
+  } catch {
+    return null;
+  }
 }
 
 function hashString(value: string): number {
