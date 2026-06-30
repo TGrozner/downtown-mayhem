@@ -1,6 +1,6 @@
 import type { ArcadeContractObjective, ArcadeContractResult, ArcadeStars } from "./arcade";
 import type { ArcadeMissionFields } from "./levels";
-import type { ProjectileId } from "./projectile";
+import { projectileOrderForUnlockedLevels, type ProjectileId } from "./projectile";
 import type { ScoreBreakdown, ScoreEvent } from "./scoring";
 
 export const DAILY_RESULTS_STORAGE_KEY = "downtown-mayhem:daily-results";
@@ -96,8 +96,6 @@ interface DailyResultsState {
   entries: Record<string, DailyResultEntry>;
 }
 
-const DAILY_PROJECTILE_ORDER: readonly ProjectileId[] = ["slug", "scatter", "pulse", "gravity"];
-
 const RUN_VARIANTS: RunVariant[] = [
   {
     id: "rush-hour",
@@ -148,7 +146,8 @@ export function dailyContractForDate(
   const seed = hashString(`downtown-daily:${dateKey}`);
   const levelIndex = seed % levels.length;
   const level = levels[levelIndex];
-  const projectileId = DAILY_PROJECTILE_ORDER[Math.floor(seed / Math.max(1, levels.length)) % DAILY_PROJECTILE_ORDER.length];
+  const projectileOrder = projectileOrderForUnlockedLevels(levels.length);
+  const projectileId = projectileOrder[Math.floor(seed / Math.max(1, levels.length)) % projectileOrder.length];
   const variantSeed = hashString(`${dateKey}:${level.id}:${projectileId}`);
   const variant = runVariantForSeed(level.id, variantSeed);
   return {

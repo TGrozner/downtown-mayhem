@@ -25,6 +25,15 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   showFps: true
 };
 
+export const COMFORT_GAME_SETTINGS: GameSettings = {
+  graphicsQuality: "performance",
+  antialias: false,
+  masterVolume: 0.68,
+  cameraShake: 0.24,
+  motionEffects: false,
+  showFps: true
+};
+
 export const GRAPHICS_QUALITY_LABELS: Record<GraphicsQuality, string> = {
   performance: "Performance",
   balanced: "Balanced",

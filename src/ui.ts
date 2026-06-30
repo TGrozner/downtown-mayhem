@@ -2,9 +2,10 @@ import type { ArcadeContractObjectiveResult, ArcadeLevelProgress, ArcadeResult }
 import type { ArcadeMissionFields } from "./levels";
 import type { DailyResultMeta, RunFeedback } from "./mayhemFeatures";
 import type { ProjectileDefinition, ProjectileId } from "./projectile";
-import { PROJECTILE_ORDER, PROJECTILES } from "./projectile";
+import { LATE_GAME_PROJECTILE_ORDER, PROJECTILE_ORDER, PROJECTILES } from "./projectile";
 import type { ScoreBreakdown } from "./scoring";
 import {
+  COMFORT_GAME_SETTINGS,
   GRAPHICS_QUALITY_LABELS,
   type GameSettings,
   type GraphicsQuality
@@ -204,7 +205,7 @@ export class GameUI {
         <em data-role="turn-prompt-hint">Score unlocks when the chain reactions settle.</em>
       </button>
 
-      <section class="hud__results" data-role="score" aria-live="polite"></section>
+      <section class="hud__results" data-role="score" aria-live="polite" aria-label="Run result" tabindex="-1"></section>
 
       <section class="hud__home" aria-label="Downtown Mayhem menu">
         <div class="hud__hero">
@@ -224,6 +225,7 @@ export class GameUI {
         <div class="hud__settings-panel">
           <div class="hud__settings-head">
             <button type="button" data-action="settings-back" aria-label="Back to menu">Back</button>
+            <button type="button" data-action="settings-comfort">Comfort</button>
             <button type="button" data-action="settings-defaults">Defaults</button>
           </div>
           <span class="hud__eyebrow">RANGE SETTINGS</span>
@@ -306,11 +308,12 @@ export class GameUI {
     this.showFpsInput = this.requireElement("[data-setting='show-fps']");
 
     const projectileRoot = this.requireElement<HTMLDivElement>("[data-role='projectiles']");
-    for (const id of PROJECTILE_ORDER) {
+    for (const id of LATE_GAME_PROJECTILE_ORDER) {
       const definition = PROJECTILES[id];
       const button = document.createElement("button");
       button.type = "button";
       button.className = "hud__projectile";
+      button.hidden = !PROJECTILE_ORDER.includes(id);
       button.setAttribute("aria-label", definition.shortName);
       button.title = `${definition.key}: ${definition.name} - ${definition.role}. ${definition.description}`;
       button.style.setProperty("--projectile", `#${definition.color.getHexString()}`);
@@ -331,6 +334,9 @@ export class GameUI {
     this.requireElement<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => this.callbacks.openMainMenu());
     this.requireElement<HTMLButtonElement>("[data-action='settings']").addEventListener("click", () => this.showScreen("settings"));
     this.requireElement<HTMLButtonElement>("[data-action='settings-back']").addEventListener("click", () => this.showScreen("home"));
+    this.requireElement<HTMLButtonElement>("[data-action='settings-comfort']").addEventListener("click", () =>
+      this.callbacks.updateSettings({ ...COMFORT_GAME_SETTINGS })
+    );
     this.requireElement<HTMLButtonElement>("[data-action='settings-defaults']").addEventListener("click", () => this.callbacks.resetSettings());
 
     for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-quality]")) {
@@ -425,14 +431,15 @@ export class GameUI {
     if (this.turnPrompt.disabled !== turnPromptDisabled) {
       this.turnPrompt.disabled = turnPromptDisabled;
     }
-    setText(this.turnPromptTitle, state.canFinishRun ? "Tap to score" : "Watching mayhem");
+    setText(this.turnPrompt.querySelector("span") ?? this.turnPrompt, state.canFinishRun ? "Score ready" : "Post-shot scoring");
+    setText(this.turnPromptTitle, state.canFinishRun ? "Tap to reveal result" : "Watching chain reactions");
     setText(
       this.turnPromptHint,
       state.liveScore && state.liveScore.totalScore > 0
-        ? `${formatScoreNumber(state.liveScore.totalScore)} running Mayhem`
+        ? `${formatScoreNumber(state.liveScore.totalScore)} running Mayhem; score locks when debris settles.`
         : state.canFinishRun
-          ? "End the turn and show the result."
-          : "Score unlocks when the chain reactions settle."
+          ? "End the turn and show stars, contract, and retry recipe."
+          : "Score unlocks after the spectacle phase settles."
     );
     this.root.classList.toggle("is-post-shot", postShot);
     this.root.classList.toggle("can-finish-run", state.canFinishRun && !state.score);
@@ -441,6 +448,10 @@ export class GameUI {
     if (this.activeProjectileId !== state.projectileId) {
       for (const [id, button] of this.projectileButtons) {
         const active = id === state.projectileId;
+        const visible = PROJECTILE_ORDER.includes(id) || active;
+        if (button.hidden !== !visible) {
+          button.hidden = !visible;
+        }
         button.classList.toggle("is-active", active);
         button.setAttribute("aria-pressed", String(active));
       }
@@ -471,6 +482,7 @@ export class GameUI {
       this.scorePanel.classList.add("is-visible");
       this.scorePanel.dataset.resultState = resultStateKey(state);
       this.scorePanel.dataset.newBest = String(Boolean(state.resultMeta?.newBest));
+      this.scorePanel.setAttribute("aria-label", resultPanelLabel(state));
       if (this.renderedScore !== state.score) {
         this.scorePanel.innerHTML = renderScore(state);
         this.bindResultActions();
@@ -480,6 +492,7 @@ export class GameUI {
       if (shouldRevealScore) {
         this.scorePanel.classList.add("is-ceremony-enter");
         this.scorePanel.scrollTo({ top: 0, behavior: "instant" });
+        this.scorePanel.focus({ preventScroll: true });
         this.startScoreCountUp(state.score.totalScore);
         window.setTimeout(() => this.scorePanel.classList.remove("is-ceremony-enter"), 1200);
       }
@@ -490,6 +503,7 @@ export class GameUI {
       this.scorePanel.classList.remove("is-ceremony-enter");
       delete this.scorePanel.dataset.resultState;
       delete this.scorePanel.dataset.newBest;
+      this.scorePanel.setAttribute("aria-label", "Run result");
       this.scorePanel.innerHTML = "";
       this.stopScoreCountUp();
     }
@@ -510,6 +524,7 @@ export class GameUI {
     this.scorePanel.classList.remove("is-ceremony-enter");
     delete this.scorePanel.dataset.resultState;
     delete this.scorePanel.dataset.newBest;
+    this.scorePanel.setAttribute("aria-label", "Run result");
     this.scorePanel.innerHTML = "";
     this.root.classList.remove("has-results");
     this.stopScoreCountUp();
@@ -543,17 +558,23 @@ export class GameUI {
       .map((level) => {
         const active = level.index === state.levelIndex;
         const locked = level.locked;
+        const previous = state.levels[level.index - 1];
+        const missingPreviousStars = previous ? Math.max(0, 2 - previous.progress.stars) : 0;
         const progressText = locked
-          ? "LOCKED / get 2 stars on previous level"
+          ? `LOCKED / ${missingPreviousStars} more ${missingPreviousStars === 1 ? "star" : "stars"} needed`
           : `${active ? "ACTIVE" : "LEVEL"} / ${starText(level.progress.stars)}`;
         const detailText = locked
-          ? "Earn 2 stars on the previous district"
+          ? `${previous ? previous.name : "Previous district"} needs 2 stars to unlock this card.`
           : `${formatScoreNumber(level.progress.attempts)} attempts / Best ${formatScoreNumber(level.progress.bestScore)}`;
+        const ariaLabel = locked
+          ? `${level.name}, locked. Earn ${missingPreviousStars} more ${missingPreviousStars === 1 ? "star" : "stars"} on ${previous?.name ?? "the previous district"}.`
+          : `${level.name}, ${level.objective}. ${level.description}. ${detailText}.`;
         return `
-          <button type="button" class="hud__level-card${active ? " is-current" : ""}${locked ? " is-locked" : ""}" data-action="start-arcade" data-level-index="${level.index}" ${locked ? "disabled" : ""}>
+          <button type="button" class="hud__level-card${active ? " is-current" : ""}${locked ? " is-locked" : ""}" data-action="start-arcade" data-level-index="${level.index}" aria-label="${escapeHtml(ariaLabel)}" ${locked ? "disabled" : ""}>
             <span>${String(level.index + 1).padStart(2, "0")} / ${progressText}</span>
             <strong>${escapeHtml(level.name)}</strong>
             <em>${escapeHtml(level.objective)}</em>
+            <small>${escapeHtml(level.description)}</small>
             <small>${escapeHtml(detailText)}</small>
           </button>
         `;
@@ -788,11 +809,22 @@ function renderScore(state: UIState): string {
       }
     </div>
     <div class="hud__result-actions">
-      <button type="button" data-action="result-menu">Menu</button>
-      ${primaryAction === "retry" ? `<button class="is-primary" type="button" data-action="result-retry">${result?.completed ? "Retry For 3 Stars" : "Retry Run"}</button>` : `<button type="button" data-action="result-retry">Retry</button>`}
-      ${hasNextDistrict ? (primaryAction === "next" ? `<button class="is-primary" type="button" data-action="result-next">Next District</button>` : `<button type="button" data-action="result-next">Next District</button>`) : ""}
+      <button type="button" data-action="result-menu" aria-label="Return to district menu">Menu</button>
+      ${primaryAction === "retry" ? `<button class="is-primary" type="button" data-action="result-retry" aria-label="${result?.completed ? "Retry this district for three stars" : "Retry this run with the coach recipe"}">${result?.completed ? "Retry For 3 Stars" : "Retry Run"}</button>` : `<button type="button" data-action="result-retry" aria-label="Retry this district">Retry</button>`}
+      ${hasNextDistrict ? (primaryAction === "next" ? `<button class="is-primary" type="button" data-action="result-next" aria-label="Start the next unlocked district">Next District</button>` : `<button type="button" data-action="result-next" aria-label="Start the next unlocked district">Next District</button>`) : ""}
     </div>
   `;
+}
+
+function resultPanelLabel(state: UIState): string {
+  const score = state.score;
+  const result = state.arcadeResult;
+  if (!score) {
+    return "Run result";
+  }
+  const stars = result?.stars ?? 0;
+  const status = result?.completed ? (stars >= 3 ? "three star result" : "district complete") : "needs two stars";
+  return `${state.levelName} ${status}, ${stars} stars, ${formatScoreNumber(score.totalScore)} Mayhem Score.`;
 }
 
 function resultStateKey(state: UIState): string {
@@ -901,13 +933,18 @@ function renderResultCallout(callout: { className: string; label: string; value:
 function renderRunCoach(feedback: RunFeedback): string {
   const topSources = feedback.topSources.slice(0, 3);
   const nearMisses = feedback.nearMisses.slice(0, 3);
+  const recipe = retryRecipe(feedback, topSources, nearMisses);
   return `
-    <div class="hud__run-coach" data-role="run-coach">
+    <div class="hud__run-coach" data-role="run-coach" aria-label="Run Coach retry recipe">
       <div class="hud__run-coach-head">
         <span>Run Coach</span>
         <strong>${escapeHtml(feedback.variant.label)}</strong>
       </div>
       <div class="hud__run-coach-grid">
+        <div class="hud__run-coach-recipe">
+          <span>Retry recipe</span>
+          <strong>${escapeHtml(recipe)}</strong>
+        </div>
         <div>
           <span>Best sources</span>
           <strong>${topSources.length > 0 ? escapeHtml(topSources.map((source) => `${source.label} ${formatScoreNumber(source.points)}`).join(" / ")) : "No strong source"}</strong>
@@ -923,6 +960,24 @@ function renderRunCoach(feedback: RunFeedback): string {
       </div>
     </div>
   `;
+}
+
+function retryRecipe(
+  feedback: RunFeedback,
+  topSources: readonly { label: string; points: number }[],
+  nearMisses: readonly string[]
+): string {
+  const firstTarget = nearMisses[0] ?? feedback.projectileObjective?.label ?? feedback.contract?.summary ?? feedback.variant.description;
+  const source = topSources[0]?.label;
+  const replay = feedback.replayMoment?.label;
+  const parts = [`Open with ${firstTarget}`];
+  if (source) {
+    parts.push(`repeat the ${source} angle`);
+  }
+  if (replay) {
+    parts.push(`protect the ${replay} moment`);
+  }
+  return `${parts.join("; ")}.`;
 }
 
 function renderDailyResultSummary(result: DailyResultMeta): string {
@@ -950,6 +1005,7 @@ function renderDailyResultSummary(result: DailyResultMeta): string {
         </div>
       </div>
       <code data-role="daily-share">${escapeHtml(result.shareText)}</code>
+      <small>Replay today from the Daily Contract card in the menu.</small>
     </div>
   `;
 }
@@ -2043,6 +2099,13 @@ function installStyles(): void {
       user-select: text;
     }
 
+    .hud__daily-result small {
+      color: #ffe08b;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.3;
+    }
+
     .hud__contract-head {
       min-height: 28px;
       border: 1px solid rgba(255, 207, 105, 0.22);
@@ -2305,6 +2368,14 @@ function installStyles(): void {
       text-overflow: ellipsis;
       text-transform: uppercase;
       white-space: nowrap;
+    }
+
+    .hud__level-card em,
+    .hud__level-card small {
+      display: block;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      white-space: normal;
     }
 
     .hud__level-card strong {

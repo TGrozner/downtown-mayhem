@@ -173,7 +173,7 @@ test("switches mobile portrait to a frictionless post-shot turn prompt", async (
   await expect(page.locator(".hud__command")).toBeHidden();
   const turnPrompt = page.locator("[data-action='turn-finish']");
   await expect(turnPrompt).toBeVisible();
-  await expect(turnPrompt).toContainText(/Watching mayhem|Tap to score/);
+  await expect(turnPrompt).toContainText(/Watching chain reactions|Tap to reveal result/);
   await expect(turnPrompt).toContainText(/running Mayhem|Score unlocks/);
   await expect.poll(() => page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getLiveMastery() ?? null), {
     timeout: UI_READY_TIMEOUT_MS
@@ -202,7 +202,7 @@ test("lets mobile tap the post-shot prompt to reveal the score", async ({ page }
   expect(consoleErrors).toEqual([]);
 });
 
-test("shows a clear three-level selector without free play", async ({ page }) => {
+test("shows a clear five-level selector without free play", async ({ page }) => {
   test.setTimeout(LONG_TEST_TIMEOUT_MS);
   const consoleErrors = trackRuntimeErrors(page);
 
@@ -219,15 +219,23 @@ test("shows a clear three-level selector without free play", async ({ page }) =>
   await expect(page.locator("[data-mode]")).toHaveCount(0);
   await expect(page.locator("[data-action='start-daily']")).toContainText("Daily Contract");
   await expect(page.locator("[data-action='start-daily']")).toContainText("Hazard Junction");
-  await expect(page.locator("[data-role='shell-progress']")).toHaveText("Campaign 0/9 stars / 1/3 districts open");
-  await expect(page.locator("[data-role='shell-levels'] [data-action='start-arcade']")).toHaveCount(3);
+  await expect(page.locator("[data-action='start-daily']")).toContainText(/Play today's fixed seed|Replay today's fixed seed/);
+  await expect(page.locator("[data-role='shell-progress']")).toHaveText("Campaign 0/15 stars / 1/5 districts open");
+  await expect(page.locator("[data-role='shell-levels'] [data-action='start-arcade']")).toHaveCount(5);
   await expect(levelCard(page, "Hazard Junction")).toBeVisible();
   await expect(levelCard(page, "Hazard Junction")).toContainText("0 attempts / Best 0");
+  await expect(levelCard(page, "Hazard Junction")).toContainText("Target");
   await expect(levelCard(page, "Breaker Yard")).toBeVisible();
+  await expect(levelCard(page, "Breaker Yard")).toContainText("2 more stars");
+  await expect(levelCard(page, "Breaker Yard")).toContainText("Hazard Junction");
   await expect(levelCard(page, "Switchback Crush")).toBeVisible();
+  await expect(levelCard(page, "Relay Gauntlet")).toBeVisible();
+  await expect(levelCard(page, "Overdrive Core")).toBeVisible();
   await expect(levelCard(page, "Hazard Junction")).toBeEnabled();
   await expect(levelCard(page, "Breaker Yard")).toBeDisabled();
   await expect(levelCard(page, "Switchback Crush")).toBeDisabled();
+  await expect(levelCard(page, "Relay Gauntlet")).toBeDisabled();
+  await expect(levelCard(page, "Overdrive Core")).toBeDisabled();
   await expect(page.getByText("Crosswind Depot")).toHaveCount(0);
 
   await clickUi(levelCard(page, "Hazard Junction"));
@@ -271,13 +279,14 @@ test("records a local daily best and shows a shareable result summary", async ({
   await expectRenderableCanvas(page);
   const daily = await page.evaluate(() => window.__DOWNTOWN_MAYHEM_DEBUG__?.getDailyContract() ?? null) as {
     dateKey: string;
-    projectileId: "slug" | "scatter" | "pulse" | "gravity";
+    projectileId: "slug" | "scatter" | "pulse" | "gravity" | "ignite";
   };
   const shotNames = {
     slug: "Normal Shell",
     scatter: "Fragmentation Cluster",
     pulse: "Impulse Orb",
-    gravity: "Heavy Penetrator"
+    gravity: "Heavy Penetrator",
+    ignite: "Ignite Lattice"
   };
 
   await clickUi(fireButton(page));
@@ -349,16 +358,16 @@ test("ignores stale renderer preferences and boots WebGL", async ({ page }) => {
   expect(consoleErrors).toEqual([]);
 });
 
-test("loads the baked second and third city levels inside their object budgets", async ({ page }) => {
+test("loads the baked later city levels inside their object budgets", async ({ page }) => {
   test.setTimeout(LONG_TEST_TIMEOUT_MS);
   const consoleErrors = trackRuntimeErrors(page);
 
   await useSmokePerformanceSettings(page);
-  await seedArcadeProgress(page, { "hazard-junction": 2, "breaker-yard": 2 });
+  await seedArcadeProgress(page, { "hazard-junction": 2, "breaker-yard": 2, "switchback-crush": 2, "relay-gauntlet": 2 });
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto(SMOKE_URL);
 
-  for (const levelName of ["Breaker Yard", "Switchback Crush"]) {
+  for (const levelName of ["Breaker Yard", "Switchback Crush", "Relay Gauntlet", "Overdrive Core"]) {
     await clickUi(levelCard(page, levelName));
     await expectLevelReady(page, levelName);
     await expectRenderableCanvas(page);
@@ -524,6 +533,16 @@ test("persists real settings and applies the FPS toggle after reload", async ({ 
 
   await openSettings(page);
 
+  await clickUi(page.getByRole("button", { name: "Comfort" }));
+  await expect.poll(() => page.evaluate(readSavedSettings).catch(() => ({}))).toMatchObject({
+    graphicsQuality: "performance",
+    antialias: false,
+    masterVolume: 0.68,
+    cameraShake: 0.24,
+    motionEffects: false,
+    showFps: true
+  });
+
   await clickUi(page.getByRole("button", { name: "Performance" }));
   await uncheckUi(page.locator("[data-setting='antialias']"));
   await setRange(page, "master-volume", 35);
@@ -675,6 +694,7 @@ async function expectFinalScore(page: Page, shotName: string): Promise<void> {
   const scorePanel = page.locator(".hud [data-role='score']");
   await expect(scorePanel).toBeVisible({ timeout: SCORE_REVEAL_TIMEOUT_MS });
   await expect(scorePanel).toHaveAttribute("data-result-state", /three-star|complete|one-star|incomplete/);
+  await expect(scorePanel).toHaveAttribute("aria-label", /Mayhem Score/);
   await expect(scorePanel.locator(".hud__result-head")).toContainText(/Mayhem|Needs 2 Stars/);
   await expect(scorePanel.locator(".hud__score-breakdown")).toContainText(shotName);
   await expect(scorePanel.locator(".hud__result-actions .is-primary")).toBeVisible();
@@ -683,6 +703,7 @@ async function expectFinalScore(page: Page, shotName: string): Promise<void> {
   await expect(scorePanel.getByText("Object damage", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Run Contract", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Run Coach", { exact: true })).toBeVisible();
+  await expect(scorePanel.getByText("Retry recipe", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Collateral Chaos", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Secondary Hits", { exact: true })).toBeVisible();
   await expect(scorePanel.getByText("Top Damage", { exact: true })).toBeVisible();
@@ -840,7 +861,7 @@ async function freezeForCapture(page: Page): Promise<RenderStats> {
 async function seedArcadeProgress(page: Page, starsByLevel: Record<string, 0 | 1 | 2 | 3>): Promise<void> {
   await page.addInitScript(
     ({ key, stars }) => {
-      const levelIds = ["hazard-junction", "breaker-yard", "switchback-crush"];
+      const levelIds = ["hazard-junction", "breaker-yard", "switchback-crush", "relay-gauntlet", "overdrive-core"];
       let highestUnlockedLevel = 0;
       for (let index = 0; index < levelIds.length - 1; index += 1) {
         if (Number(stars[levelIds[index]] ?? 0) < 2) {

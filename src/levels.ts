@@ -148,6 +148,56 @@ export const TEST_CHAMBERS: TestChamber[] = [
       briefingHint: "Foam is still the steering wheel, but now the city gives you multiple redirect lines instead of one obvious lane."
     },
     setup: (context) => setupSwitchbackCrushCity(context)
+  },
+  {
+    id: "relay-gauntlet",
+    name: "Relay Gauntlet",
+    description: "A late breaker route tuned for payload-specific mastery through relay towers, traffic, and capacitor weak points.",
+    objective: "Use the right payload to open the relay web, then cash out through the boss capacitor and traffic loops.",
+    chaosBrief: "Payload choice matters: wide waves control the relay field, while heavy shots can punch the capacitor route.",
+    cannonPosition: new THREE.Vector3(-8.25, 6.2, 25.1),
+    defaultAimPoint: new THREE.Vector3(4.9, 0.2, -5.2),
+    cameraTarget: new THREE.Vector3(1.1, 1.0, -2.9),
+    mission: {
+      arc: "object-destruction",
+      order: 4,
+      targetZone: "breaker-boss",
+      scoreThresholds: {
+        oneStar: 155_000,
+        twoStar: 315_000,
+        threeStar: 520_000
+      },
+      targetDamageThreshold: 58_000,
+      bonusThreshold: { metric: "maxChainCombo", minimum: 28 },
+      bonusObjective: "Build a x28+ max chain through breaker relays, capacitor weak points, moving traffic, and utility cargo.",
+      briefingHint: "Start on the capacitor stack or relay booths if you want a clean route; traffic and transformer rows are the high-score line."
+    },
+    setup: (context) => setupBreakerYardCity(context)
+  },
+  {
+    id: "overdrive-core",
+    name: "Overdrive Core",
+    description: "A final combined challenge with brittle archive towers, redirect pads, pressure bulbs, and a high-score cascade route.",
+    objective: "Crack the archive boss, steer debris across both switchbacks, and keep collateral chaos alive until the score settles.",
+    chaosBrief: "This is the compact mastery test: damage, redirects, chain timing, and late-game payloads all matter.",
+    cannonPosition: new THREE.Vector3(8.35, 6.15, 25.0),
+    defaultAimPoint: new THREE.Vector3(7.35, 0.2, -4.55),
+    cameraTarget: new THREE.Vector3(1.35, 1.05, -2.6),
+    mission: {
+      arc: "object-destruction",
+      order: 5,
+      targetZone: "archive-boss",
+      scoreThresholds: {
+        oneStar: 180_000,
+        twoStar: 360_000,
+        threeStar: 610_000
+      },
+      targetDamageThreshold: 66_000,
+      bonusThreshold: { metric: "collateralChaos", minimum: 140_000 },
+      bonusObjective: "Push 140,000+ collateral chaos from archive glass, redirect pads, pressure bulbs, traffic, and service crates.",
+      briefingHint: "The boss lens is the clean opener; the messy high-score route rides foam redirects into traffic and brittle towers."
+    },
+    setup: (context) => setupSwitchbackCrushCity(context)
   }
 ];
 

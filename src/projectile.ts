@@ -35,7 +35,13 @@ export interface ActiveProjectile {
   piercedObjectIds: Set<number>;
 }
 
+export const IGNITE_UNLOCK_LEVEL_COUNT = 5;
 export const PROJECTILE_ORDER: ProjectileId[] = ["slug", "scatter", "pulse", "gravity"];
+export const LATE_GAME_PROJECTILE_ORDER: ProjectileId[] = [...PROJECTILE_ORDER, "ignite"];
+
+export function projectileOrderForUnlockedLevels(unlockedLevelCount: number): readonly ProjectileId[] {
+  return unlockedLevelCount >= IGNITE_UNLOCK_LEVEL_COUNT ? LATE_GAME_PROJECTILE_ORDER : PROJECTILE_ORDER;
+}
 
 export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
   slug: {
@@ -108,10 +114,10 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
   },
   ignite: {
     id: "ignite",
-    key: "0",
-    name: "Hazard Ignition",
+    key: "5",
+    name: "Ignite Lattice",
     shortName: "Ignite",
-    role: "Hazard chain",
+    role: "Sci-fi ignition",
     color: new THREE.Color(0xff7a35),
     materialId: "rubber",
     baseRadius: 0.24,
@@ -121,7 +127,7 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     blastRadius: 4.65,
     fractureBoost: 1.18,
     scoreModifier: 1.18,
-    description: "Internal hazard ignition profile for gas and fire chain reactions."
+    description: "Late-game sci-fi lattice that primes fictional hazard chains without a heavy first impact."
   }
 };
 

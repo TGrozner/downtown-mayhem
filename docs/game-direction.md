@@ -74,7 +74,7 @@ The main mode should become Arcade:
    and unlock/next-level state.
 7. **Retry Or Next**: make either action a single click/key press.
 
-The menu should stay as a direct three-level selector with settings one click
+The menu should stay as a direct five-level selector with settings one click
 away. A separate Free Play mode is intentionally out unless it gains genuinely
 different rules.
 
@@ -143,7 +143,7 @@ Suggested initial level arc:
 Highest priority:
 
 - Replace pure sandbox startup with a title/menu that shows the live scene.
-- Keep the three-level selector readable.
+- Keep the five-level selector readable.
 - Add persistent level stars/best scores.
 - Add a results ceremony with animated score and stars.
 - Add a compact level-select path.
@@ -183,13 +183,14 @@ As of this note, the project already has a strong short loop:
 
 - phase machine: aim, flight, spectacle, scored
 - one-shot cannon firing
-- four projectile types
+- four standard projectile types plus one late-game Daily Contract payload
 - chain triggers
 - volatile hazard chains
 - score popups
 - delayed score reveal
-- four active object-destruction city levels with per-level cannon placement
-- four projectile types: Normal, Fragmentation, Impulse, and Heavy
+- five active object-destruction city levels with per-level cannon placement
+- four standard projectile types: Normal, Fragmentation, Impulse, and Heavy
+- one late-game sci-fi Daily Contract payload: Ignite Lattice
 
 The missing layer is not more raw destruction. The missing layer is structure:
 Arcade progression, persistent results, objective thresholds, and a stronger

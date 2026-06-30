@@ -116,6 +116,26 @@ export const DEFAULT_ARCADE_LEVELS: ArcadeLevelDefinition[] = [
       threeStarScore: 440_000,
       threeStarBonus: { metric: "collateralChaos", minimum: 95_000 }
     }
+  },
+  {
+    id: "relay-gauntlet",
+    title: "Relay Gauntlet",
+    thresholds: {
+      missionScore: 155_000,
+      twoStarScore: 315_000,
+      threeStarScore: 520_000,
+      threeStarBonus: { metric: "maxChainCombo", minimum: 28 }
+    }
+  },
+  {
+    id: "overdrive-core",
+    title: "Overdrive Core",
+    thresholds: {
+      missionScore: 180_000,
+      twoStarScore: 360_000,
+      threeStarScore: 610_000,
+      threeStarBonus: { metric: "collateralChaos", minimum: 140_000 }
+    }
   }
 ] as const;
 

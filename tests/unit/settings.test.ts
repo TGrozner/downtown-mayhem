@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  COMFORT_GAME_SETTINGS,
   DEFAULT_GAME_SETTINGS,
   GAME_SETTINGS_STORAGE_KEY,
   type SettingsStorage,
@@ -16,6 +17,19 @@ describe("game settings", () => {
       graphicsQuality: "cinematic",
       antialias: true
     });
+  });
+
+  test("provides a reduced-intensity comfort preset without changing the default profile", () => {
+    expect(COMFORT_GAME_SETTINGS).toEqual({
+      graphicsQuality: "performance",
+      antialias: false,
+      masterVolume: 0.68,
+      cameraShake: 0.24,
+      motionEffects: false,
+      showFps: true
+    });
+    expect(DEFAULT_GAME_SETTINGS.graphicsQuality).toBe("cinematic");
+    expect(DEFAULT_GAME_SETTINGS.motionEffects).toBe(true);
   });
 
   test("sanitizes unknown and out-of-range values", () => {

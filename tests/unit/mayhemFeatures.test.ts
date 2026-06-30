@@ -59,6 +59,31 @@ describe("mayhem feature helpers", () => {
     expect(nextDay?.dateKey).toBe("2026-07-01");
   });
 
+  test("adds Ignite to daily rotation only after the late-game level count is unlocked", () => {
+    const levels = [
+      { id: "hazard-junction", mission: MISSION },
+      { id: "breaker-yard", mission: { ...MISSION, order: 2, targetZone: "breaker-spine" } },
+      { id: "switchback-crush", mission: { ...MISSION, order: 3, targetZone: "glass-depot" } },
+      { id: "relay-gauntlet", mission: { ...MISSION, order: 4, targetZone: "breaker-boss" } },
+      { id: "overdrive-core", mission: { ...MISSION, order: 5, targetZone: "archive-boss" } }
+    ];
+    let igniteDate: Date | null = null;
+    for (let day = 1; day <= 60; day += 1) {
+      const date = new Date(Date.UTC(2026, 6, day));
+      if (dailyContractForDate(levels, date)?.projectileId === "ignite") {
+        igniteDate = date;
+        break;
+      }
+    }
+
+    expect(igniteDate).not.toBeNull();
+    if (!igniteDate) {
+      return;
+    }
+    expect(dailyContractForDate(levels, igniteDate)?.projectileId).toBe("ignite");
+    expect(dailyContractForDate(levels.slice(0, 4), igniteDate)?.projectileId).not.toBe("ignite");
+  });
+
   test("summarizes score sources and chooses a replay moment", () => {
     const events: ScoreEvent[] = [
       event("target", "TARGET BREAK", 420),

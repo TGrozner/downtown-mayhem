@@ -551,6 +551,7 @@ export class ParticleSystem {
       1.25
     );
     this.spawnImpactPunch(origin, coreOrigin, visualRadius, profile, dustColor, context, impactScale);
+    this.spawnStagedPrimaryImpactLayers(origin, coreOrigin, visualRadius, profile, dustColor, smokeColor, context, impactScale);
     this.spawnCinematicDetonationLayers(origin, coreOrigin, visualRadius, profile, dustColor, smokeColor, context, impactScale, composition);
     this.spawnBoomFireball(origin, coreOrigin, visualRadius, profile, context, impactScale);
     this.spawnRollingExplosionCloud(origin, coreOrigin, visualRadius, smokeColor, dustColor, context, impactScale);
@@ -566,6 +567,7 @@ export class ParticleSystem {
     this.spawnPressureWave(origin, visualRadius * (1.04 + profile.shockBias * 0.18), profile.shockColor, context.role === "primary" ? 0.58 : 0.38, impactScale);
     this.spawnDirectionalBlast(origin, normalizedImpactDirectionInto(this.responseDirection, context.impactDirection), visualRadius, profile, dustColor, particleScale);
     this.spawnStreaks(origin, visualRadius, profile.streakColor, Math.round(14 * streakAmount), 0.52);
+    this.spawnHeroDebrisStreaks(origin, normalizedImpactDirectionInto(this.signatureDirection, context.impactDirection), visualRadius, profile, dustColor, context, impactScale);
     this.spawnSmokePuffs(coreOrigin, visualRadius, smokeColor, smokeAmount);
     this.spawnAftermathBloom(origin, visualRadius, dustColor, smokeColor, particleScale);
     if (context.variant === "mushroom") {
@@ -619,6 +621,28 @@ export class ParticleSystem {
     this.spawnSprite(this.offsetOrigin(origin, 0, 0.36, 0), CORE_TEXTURE, 0xff7a35, 0.2 * amount, 0.96 * amount, 0.42, 0.32, 0.42, THREE.AdditiveBlending);
     this.spawnBurst(this.offsetOrigin(origin, 0, 0.34, 0), Math.round(22 * amount), 0xff8f38, 0.42, 0.055, 4.8 * amount, 0.1, 0.1, THREE.AdditiveBlending);
     this.spawnBurst(this.offsetOrigin(origin, 0, 0.48, 0), Math.round(14 * amount), 0x2d2824, 1.15, 0.1, 1.8 * amount, -0.12, 0.4);
+  }
+
+  hazardDetonationCue(origin: THREE.Vector3, color: THREE.ColorRepresentation = 0xff9a42, intensity = 1, mushroomCloud = false): void {
+    const amount = THREE.MathUtils.clamp(intensity, 0.35, mushroomCloud ? 2.8 : 1.8);
+    const lifted = this.offsetOrigin(origin, 0, mushroomCloud ? 0.42 : 0.28, 0);
+    this.spawnSprite(lifted, CORE_TEXTURE, color, 0.22 * amount, 1.18 * amount, 0.34, 0.18, 0.08, THREE.AdditiveBlending, 1.18);
+    this.spawnPressureWave(origin, (mushroomCloud ? 1.45 : 0.92) * amount, color, mushroomCloud ? 0.34 : 0.24, amount);
+    if (this.quality !== "performance") {
+      this.spawnArcWeb(origin, (mushroomCloud ? 1.2 : 0.78) * amount, color, Math.round((mushroomCloud ? 16 : 9) * amount), 0.26);
+      this.spawnBurst(this.offsetOrigin(origin, 0, 0.12, 0), Math.round((mushroomCloud ? 38 : 22) * amount), color, 0.3, 0.032, 8.5 * amount, 0.12, 0.05, THREE.AdditiveBlending);
+    }
+  }
+
+  gravityGroundCrushAftermath(origin: THREE.Vector3, intensity = 1): void {
+    const amount = THREE.MathUtils.clamp(intensity, 0.45, 2.35);
+    this.spawnPressureWave(this.offsetOrigin(origin, 0, 0.01, 0), 2.25 * amount, 0x9c71ff, 0.22, amount);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.04, 0), Math.round(54 * amount), 0x2a143d, 1.15, 0.075, 5.2 * amount, 1.8, 0.34);
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.08, 0), Math.round(28 * amount), 0xd8c6ff, 0.5, 0.028, 12 * amount, 0.42, 0.06, THREE.AdditiveBlending);
+    if (this.quality !== "performance") {
+      this.spawnSprite(this.offsetOrigin(origin, 0, 0.16, 0), SMOKE_TEXTURE, 0x251a35, 0.62 * amount, 2.8 * amount, 0.22, 1.7, 0.04, THREE.NormalBlending, 1.55);
+      this.spawnArcWeb(origin, 1.35 * amount, 0x8d6cff, Math.round(13 * amount), 0.34);
+    }
   }
 
   armingPulse(origin: THREE.Vector3, intensity = 1, color: THREE.ColorRepresentation = 0xff9a42): void {
@@ -1093,6 +1117,70 @@ export class ParticleSystem {
     );
   }
 
+  private spawnStagedPrimaryImpactLayers(
+    origin: THREE.Vector3,
+    coreOrigin: THREE.Vector3,
+    visualRadius: number,
+    profile: ExplosionProfile,
+    dustColor: THREE.Color,
+    smokeColor: THREE.Color,
+    context: ExplosionFxContext,
+    impactScale: number
+  ): void {
+    if (context.role !== "primary") {
+      return;
+    }
+    const isShockOnly = context.projectileId === "pulse";
+    const amount = THREE.MathUtils.clamp(impactScale * (this.quality === "cinematic" ? 1.18 : this.quality === "balanced" ? 0.86 : 0.46), 0.34, 1.85);
+    const shellColor = isShockOnly ? profile.shockColor : profile.hotColor;
+    this.spawnSprite(
+      this.offsetOrigin(coreOrigin, 0, visualRadius * 0.05, 0),
+      CORE_TEXTURE,
+      shellColor,
+      visualRadius * 0.12 * amount,
+      visualRadius * (isShockOnly ? 1.2 : 1.72) * amount,
+      isShockOnly ? 0.16 : 0.25,
+      isShockOnly ? 0.34 : 0.42,
+      isShockOnly ? 0.1 : 0.2,
+      THREE.AdditiveBlending,
+      isShockOnly ? 1.55 : 1.12,
+      this.spriteVelocity.set(0, isShockOnly ? 0.18 : 0.36, 0),
+      { delay: 0.045, fadeIn: 0.035 }
+    );
+    if (this.quality === "performance") {
+      return;
+    }
+    this.spawnFlipbookSprite(
+      this.offsetOrigin(coreOrigin, 0, visualRadius * 0.12, 0),
+      isShockOnly ? VFX_FLIPBOOK_PROFILES.smoke : VFX_FLIPBOOK_PROFILES.dustShell,
+      visualRadius * (isShockOnly ? 0.26 : 0.34) * amount,
+      visualRadius * (isShockOnly ? 1.35 : 2.15) * amount,
+      isShockOnly ? 0.1 : 0.2,
+      isShockOnly ? 1.25 : 1.05,
+      isShockOnly ? 0.16 : 0.28,
+      THREE.NormalBlending,
+      isShockOnly ? 1.45 : 1.55,
+      this.flipbookVelocity.set(0, isShockOnly ? 0.16 : 0.24, 0),
+      { startFrame: isShockOnly ? 10 : 2, frameSpan: isShockOnly ? 34 : 20, color: isShockOnly ? 0xbaffff : 0xffffff, delay: 0.11, fadeIn: 0.12 }
+    );
+    this.spawnSprite(
+      this.offsetOrigin(origin, 0, 0.08, 0),
+      SMOKE_TEXTURE,
+      context.projectileId === "gravity" ? profile.smokeColor : smokeColor,
+      visualRadius * 0.28 * amount,
+      visualRadius * 2.6 * amount,
+      0.16,
+      1.95,
+      0.1,
+      THREE.NormalBlending,
+      1.62,
+      this.smokeDrift.set(0, 0.08, 0),
+      { delay: 0.2, fadeIn: 0.26 }
+    );
+    this.spawnBurst(this.offsetOrigin(origin, 0, 0.05, 0), Math.round(34 * amount), dustColor, 1.45, 0.08, 5.8 * amount, 1.9, 0.42);
+    perfMonitor.addCount("vfx.stagedPrimaryLayersSpawned");
+  }
+
   private spawnCinematicDetonationLayers(
     origin: THREE.Vector3,
     coreOrigin: THREE.Vector3,
@@ -1517,6 +1605,9 @@ export class ParticleSystem {
         this.spawnStreaks(origin, visualRadius * 1.5, 0xfff0a8, Math.round(34 * impactScale), 0.5);
         this.spawnBurst(origin, Math.round(72 * impactScale), 0xffd26b, 0.5, 0.028, 42 * impactScale, 0.64, 0.03, THREE.AdditiveBlending);
         this.spawnPressureWave(origin, visualRadius * 0.78, 0xffc961, 0.27, impactScale);
+        if (context.role === "secondary" && this.quality !== "performance") {
+          this.spawnSprite(coreOrigin, CORE_TEXTURE, 0xfff0a8, visualRadius * 0.12, visualRadius * 0.82, 0.22, 0.24, 0.16, THREE.AdditiveBlending, 0.72, this.spriteVelocity.set(0, 0.28, 0), { delay: 0.08, fadeIn: 0.03 });
+        }
         break;
       case "pulse":
         this.spawnPressureWave(origin, visualRadius * 1.34, 0xd9feff, 0.38, impactScale * 1.24);
@@ -1533,6 +1624,9 @@ export class ParticleSystem {
           this.spawnSprite(coreOrigin, SMOKE_TEXTURE, 0x251a35, visualRadius * 0.56 * crushScale, visualRadius * 2.05 * crushScale, 0.38, 0.82, -0.1, THREE.NormalBlending, 1.18);
           this.spawnSprite(this.offsetOrigin(coreOrigin, 0, 0.16, 0), CORE_TEXTURE, 0xb08aff, visualRadius * 0.18 * crushScale, visualRadius * 1.24 * crushScale, 0.3, 0.26, 0.04, THREE.AdditiveBlending, 0.62);
           this.spawnBurst(this.offsetOrigin(origin, 0, -0.05, 0), Math.round(66 * impactScale * crushScale), 0x2a143d, 1.12, 0.054, 14 * impactScale, -0.35, 0.12, THREE.AdditiveBlending);
+          if (context.role === "primary") {
+            this.gravityGroundCrushAftermath(origin, impactScale * (this.quality === "performance" ? 0.55 : 0.92));
+          }
         }
         break;
       case "ignite":
@@ -1564,6 +1658,9 @@ export class ParticleSystem {
           if (this.quality !== "performance") {
             this.spawnStreaks(origin, visualRadius * 0.58, 0xecffff, Math.round(6 * impactScale), 0.24);
           }
+          if (this.quality === "cinematic") {
+            this.spawnDirectionalStreaks(this.offsetOrigin(origin, 0, 0.2, 0), responseDirection, visualRadius * 1.05, 0xffffff, Math.round(13 * impactScale), 0.28, 0.62);
+          }
           break;
         case "metal":
           this.spawnDirectionalStreaks(origin, responseDirection, visualRadius * 0.8, 0xfff0a8, Math.round(10 * impactScale), 0.36, 0.34);
@@ -1571,11 +1668,19 @@ export class ParticleSystem {
           if (this.quality !== "performance") {
             this.spawnDirectionalBurst(this.offsetOrigin(origin, 0, 0.08, 0), responseDirection, Math.round(14 * impactScale), 0xff8f38, 0.34, 0.018, 36 * impactScale, 0.34, 0.022, 0.2, THREE.AdditiveBlending);
           }
+          if (this.quality === "cinematic") {
+            this.spawnArcWeb(origin, visualRadius * 0.86, 0xffd25c, Math.round(12 * impactScale), 0.36);
+            this.spawnDirectionalStreaks(origin, responseDirection, visualRadius * 1.18, 0xfff0a8, Math.round(12 * impactScale), 0.42, 0.46);
+          }
           break;
         case "concrete":
           this.spawnBurst(this.offsetOrigin(origin, 0, 0.08, 0), Math.round(58 * impactScale), dustColor, 1.55, 0.09, 5.2 * impactScale, 1.75, 0.34);
           if (this.quality !== "performance") {
             this.spawnBurst(this.offsetOrigin(origin, 0, 0.04, 0), Math.round(24 * impactScale), dustColor, 2.2, 0.13, 3.2 * impactScale, 1.35, 0.56);
+          }
+          if (this.quality === "cinematic") {
+            this.spawnPressureWave(this.offsetOrigin(origin, 0, 0.015, 0), visualRadius * 0.95, dustColor, 0.12, impactScale);
+            this.spawnBurst(this.offsetOrigin(origin, 0, 0.02, 0), Math.round(30 * impactScale), 0x6e6860, 1.35, 0.1, 4.4 * impactScale, 2.2, 0.5);
           }
           break;
         case "wood":
@@ -1583,6 +1688,7 @@ export class ParticleSystem {
           this.spawnBurst(origin, Math.round(34 * impactScale), 0xc08a4a, 0.9, 0.055, 10 * impactScale, 0.82, 0.16);
           if (this.quality === "cinematic") {
             this.fireLick(this.offsetOrigin(origin, 0, 0.08, 0), 0.28 * impactScale);
+            this.spawnDirectionalStreaks(origin, responseDirection, visualRadius * 0.92, 0xffd09a, Math.round(10 * impactScale), 0.5, 0.72);
           }
           break;
         case "foam":
@@ -1590,11 +1696,17 @@ export class ParticleSystem {
           if (this.quality !== "performance") {
             this.spawnSprite(this.offsetOrigin(origin, 0, 0.22, 0), SMOKE_TEXTURE, 0xfff0c8, visualRadius * 0.16, visualRadius * 0.78, 0.16, 1.35, 0.18, THREE.NormalBlending, 1.2);
           }
+          if (this.quality === "cinematic") {
+            this.spawnBurst(this.offsetOrigin(origin, 0, 0.12, 0), Math.round(24 * impactScale), 0xfff2d2, 1.45, 0.095, 7.5 * impactScale, 0.5, 0.28);
+          }
           break;
         case "rubber":
           this.spawnBurst(origin, Math.round(30 * impactScale), 0xff6c92, 0.82, 0.06, 11 * impactScale, 0.38, 0.18, THREE.AdditiveBlending);
           if (this.quality !== "performance") {
             this.spawnSprite(this.offsetOrigin(origin, 0, 0.16, 0), SMOKE_TEXTURE, 0x2b2530, visualRadius * 0.2, visualRadius * 0.95, 0.18, 1.5, 0.12, THREE.NormalBlending, 1.35);
+          }
+          if (this.quality === "cinematic") {
+            this.spawnSprite(this.offsetOrigin(origin, 0, 0.1, 0), CORE_TEXTURE, 0xff6c92, visualRadius * 0.12, visualRadius * 0.72, 0.14, 0.42, 0.06, THREE.AdditiveBlending, 1.3);
           }
           break;
       }
@@ -1644,6 +1756,31 @@ export class ParticleSystem {
     perfMonitor.addCount("vfx.streaksSpawned");
     perfMonitor.addCount("vfx.streakVertices", scaledCount * 2);
     this.trimStreaks();
+  }
+
+  private spawnHeroDebrisStreaks(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    visualRadius: number,
+    profile: ExplosionProfile,
+    dustColor: THREE.Color,
+    context: ExplosionFxContext,
+    impactScale: number
+  ): void {
+    if (context.role !== "primary" || this.quality === "performance") {
+      return;
+    }
+    const amount = THREE.MathUtils.clamp(impactScale * (this.quality === "cinematic" ? 1.12 : 0.78), 0.48, 1.7);
+    const streakCount = this.quality === "cinematic" ? 18 : 10;
+    this.signatureLiftedDirection.copy(direction);
+    this.signatureLiftedDirection.y += context.projectileId === "gravity" ? 0.06 : 0.22;
+    this.signatureLiftedDirection.normalize();
+    this.spawnDirectionalStreaks(origin, this.signatureLiftedDirection, visualRadius * (context.projectileId === "scatter" ? 1.75 : 1.35), profile.streakColor, Math.round(streakCount * amount), 0.62, context.projectileId === "scatter" ? 0.88 : 0.52);
+    this.spawnDirectionalBurst(this.offsetOrigin(origin, 0, 0.06, 0), this.signatureLiftedDirection, Math.round(18 * amount), dustColor, 1.15, 0.07, 11 * amount, 1.15, 0.18, 0.42);
+    if (this.quality === "cinematic") {
+      this.spawnStreaks(this.offsetOrigin(origin, 0, 0.1, 0), visualRadius * 0.92, profile.emberColor, Math.round(12 * amount), 0.42);
+    }
+    perfMonitor.addCount("vfx.heroDebrisStreaksSpawned");
   }
 
   private spawnArcWeb(origin: THREE.Vector3, radius: number, color: THREE.ColorRepresentation, count: number, maxLife: number): void {

@@ -41,6 +41,7 @@ import { ShotRunState } from "./runState";
 import { ScorePopupLayer } from "./scorePopups";
 import { ShotScoreTracker, type ScoreBreakdown, type ScoreEvent } from "./scoring";
 import {
+  COMFORT_GAME_SETTINGS,
   DEFAULT_GAME_SETTINGS,
   effectiveGraphicsPixelRatio,
   GRAPHICS_QUALITY_LABELS,
@@ -1098,6 +1099,7 @@ class AppShell {
         <div class="app-shell__settings-panel">
           <div class="app-shell__settings-head">
             <button type="button" data-action="menu">Back</button>
+            <button type="button" data-action="settings-comfort">Comfort</button>
             <button type="button" data-action="settings-defaults">Defaults</button>
           </div>
           <span>RANGE SETTINGS</span>
@@ -1253,6 +1255,10 @@ class AppShell {
       this.updateSettings({ ...DEFAULT_GAME_SETTINGS });
       return;
     }
+    if (action === "settings-comfort") {
+      this.updateSettings({ ...COMFORT_GAME_SETTINGS });
+      return;
+    }
 
     const quality = target.dataset.quality;
     if (quality === "performance" || quality === "balanced" || quality === "cinematic") {
@@ -1324,13 +1330,26 @@ class AppShell {
       const stars = progress?.stars ?? 0;
       const bestScore = progress?.bestScore ?? 0;
       const attempts = progress?.attempts ?? 0;
-      const progressText = locked ? "LOCKED" : `${stars}/3 stars`;
+      const previousLevel = TEST_CHAMBERS[index - 1];
+      const previousProgress = previousLevel ? this.progress.levels[previousLevel.id] : null;
+      const missingStars = previousProgress ? Math.max(0, 2 - previousProgress.stars) : 0;
+      const progressText = locked
+        ? `LOCKED / ${missingStars} more ${missingStars === 1 ? "star" : "stars"}`
+        : `${stars}/3 stars`;
+      const lockedText = previousLevel
+        ? `Earn ${missingStars} more ${missingStars === 1 ? "star" : "stars"} on ${previousLevel.name}.`
+        : "Earn 2 stars on the previous district.";
+      const missionBrief = `${level.description} Target ${formatShellScore(level.mission.targetDamageThreshold)} object damage, ${formatShellScore(level.mission.scoreThresholds.twoStar)} for unlock, ${formatShellScore(level.mission.scoreThresholds.threeStar)} for 3 stars.`;
+      const ariaLabel = locked
+        ? `${level.name}, locked. ${lockedText}`
+        : `${level.name}, ${level.objective}. ${missionBrief} ${attempts} attempts, best ${formatShellScore(bestScore)}.`;
       return `
-        <button type="button" class="app-shell__level-card${locked ? " is-locked" : ""}" data-action="start-arcade" data-level-index="${index}" ${locked ? "disabled" : ""}>
+        <button type="button" class="app-shell__level-card${locked ? " is-locked" : ""}" data-action="start-arcade" data-level-index="${index}" aria-label="${escapeShellHtml(ariaLabel)}" title="${escapeShellHtml(locked ? lockedText : missionBrief)}" ${locked ? "disabled" : ""}>
           <span>${String(index + 1).padStart(2, "0")} / ${progressText}</span>
           <strong>${escapeShellHtml(level.name)}</strong>
           <em>${escapeShellHtml(level.objective)}</em>
-          <small>${locked ? "Earn 2 stars on the previous district" : `Start ${GAME_MODES.cannon.name} / ${formatShellScore(attempts)} attempts / Best ${formatShellScore(bestScore)}`}</small>
+          <small>${escapeShellHtml(locked ? lockedText : missionBrief)}</small>
+          <small>${locked ? "Previous district gate: 2 stars" : `Start ${GAME_MODES.cannon.name} / ${formatShellScore(attempts)} attempts / Best ${formatShellScore(bestScore)}`}</small>
         </button>
       `;
     }).join("");
@@ -1367,11 +1386,13 @@ class AppShell {
     const bestLine = dailyBest
       ? `Best ${formatShellScore(dailyBest.bestScore)} / ${dailyBest.bestStars}/3 stars / ${dailyBest.attempts} attempts`
       : "No daily score yet";
+    const replayLine = dailyBest ? "Replay today's fixed seed and improve the share card" : "Play today's fixed seed for a shareable result";
     this.dailyValue.innerHTML = `
-      <button type="button" data-action="start-daily">
+      <button type="button" data-action="start-daily" aria-label="Daily Contract, ${escapeShellHtml(level.name)}. ${escapeShellHtml(replayLine)}.">
         <span>Daily Contract / ${escapeShellHtml(daily.dateKey)}</span>
         <strong>${escapeShellHtml(level.name)}</strong>
         <em>${escapeShellHtml(projectile.shortName)} / ${escapeShellHtml(daily.contract.label)} / ${escapeShellHtml(daily.contract.summary)}</em>
+        <small>${escapeShellHtml(replayLine)}</small>
         <small>${escapeShellHtml(bestLine)}</small>
       </button>
     `;
@@ -1747,6 +1768,8 @@ function installAppShellStyles(): void {
     .app-shell__level-card small {
       color: #8ddfff;
       font-weight: 800;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
     }
 
     .app-shell__settings {
@@ -4713,6 +4736,7 @@ class Game {
       detonationsThisFrame += 1;
       this.burningHazards.delete(hazard.id);
       const result = this.destruction.explode(hazard.origin, hazard.strength, hazard.radius);
+      this.particles.hazardDetonationCue(hazard.origin, hazard.color, hazard.powerScale, hazard.mushroomCloud);
       this.focusSpectacleOn(hazard.origin, result, hazard.mushroomCloud ? 260 : 145);
       this.playCinematicImpact(hazard.origin, result, undefined, hazard.mushroomCloud ? 240 : 120);
       this.explosion.play(hazard.origin, hazard.radius * 1.24, result.dustColors, {
@@ -4735,6 +4759,7 @@ class Game {
         hitMaterialId: hazard.materialId,
         role: "ignition"
       });
+      this.audio.playHazardDetonationCue(hazard.origin, hazard.powerScale, hazard.materialId, hazard.mushroomCloud);
       events.push(...this.scoreTracker.addChainReaction(Math.max(58, Math.round((result.materialChaos + result.structureDamage) * 0.28)), hazard.origin, hazard.label));
       events.push(...this.applyExplosionResult(result, Math.min(2, hazard.cascadeDepth + 1), hazard.mushroomCloud ? 0.8 : 0.24));
     }
@@ -5083,6 +5108,7 @@ class Game {
         .add(side.clone().multiplyScalar(lateral))
         .add(new THREE.Vector3(0, lift, 0));
       const cluster = this.destruction.explode(clusterOrigin, 9.8 * active.powerScale, 1.42 * active.sizeScale);
+      const miniDelay = performanceMode ? i * 0.035 : i * 0.055;
       this.explosion.play(clusterOrigin, 1.82 * active.sizeScale, cluster.dustColors, {
         projectileId: "scatter",
         result: cluster,
@@ -5093,6 +5119,7 @@ class Game {
         impactDirection: forward,
         role: "secondary"
       });
+      this.audio.playScatterMiniDetonation(clusterOrigin, active.powerScale * active.sizeScale, miniDelay);
       if (cluster.dustColors.length > 0) {
         const debrisSpray = (0.18 + cluster.fracturedBodies * 0.025) * (performanceMode ? 0.65 : 1);
         this.particles.cityDebrisSpray(clusterOrigin, cluster.dustColors, debrisSpray);

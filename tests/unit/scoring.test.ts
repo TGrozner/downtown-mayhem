@@ -2,7 +2,13 @@ import { describe, expect, test } from "vitest";
 import * as THREE from "three";
 import type { ExplosionAffectedObject, ExplosionResult } from "../../src/destruction";
 import type { PhysicsWorld } from "../../src/physics";
-import { PROJECTILE_ORDER, PROJECTILES } from "../../src/projectile";
+import {
+  IGNITE_UNLOCK_LEVEL_COUNT,
+  LATE_GAME_PROJECTILE_ORDER,
+  PROJECTILE_ORDER,
+  PROJECTILES,
+  projectileOrderForUnlockedLevels
+} from "../../src/projectile";
 import { ShotScoreTracker } from "../../src/scoring";
 
 describe("ShotScoreTracker", () => {
@@ -16,6 +22,19 @@ describe("ShotScoreTracker", () => {
       "Cyan shockwave",
       "Purple crush"
     ]);
+  });
+
+  test("exposes Ignite only through the late-game projectile order", () => {
+    expect(IGNITE_UNLOCK_LEVEL_COUNT).toBe(5);
+    expect(projectileOrderForUnlockedLevels(4)).toEqual(PROJECTILE_ORDER);
+    expect(projectileOrderForUnlockedLevels(5)).toEqual(LATE_GAME_PROJECTILE_ORDER);
+    expect(LATE_GAME_PROJECTILE_ORDER).toEqual(["slug", "scatter", "pulse", "gravity", "ignite"]);
+    expect(PROJECTILES.ignite).toMatchObject({
+      key: "5",
+      name: "Ignite Lattice",
+      shortName: "Ignite",
+      role: "Sci-fi ignition"
+    });
   });
 
   test("keeps Impulse stable while buffing Normal, Frag, and Heavy identities", () => {

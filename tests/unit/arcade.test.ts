@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { ScoreBreakdown } from "../../src/scoring";
 import {
   ARCADE_PROGRESS_STORAGE_KEY,
+  DEFAULT_ARCADE_LEVELS,
   type ArcadeLevelDefinition,
   type ArcadeStorage,
   createInitialArcadeProgress,
@@ -134,6 +135,34 @@ describe("Arcade result evaluation", () => {
 });
 
 describe("Arcade progress", () => {
+  test("ships five campaign level definitions in progression order", () => {
+    expect(DEFAULT_ARCADE_LEVELS.map((level) => level.id)).toEqual([
+      "hazard-junction",
+      "breaker-yard",
+      "switchback-crush",
+      "relay-gauntlet",
+      "overdrive-core"
+    ]);
+    expect(DEFAULT_ARCADE_LEVELS[3]).toMatchObject({
+      title: "Relay Gauntlet",
+      thresholds: {
+        missionScore: 155_000,
+        twoStarScore: 315_000,
+        threeStarScore: 520_000,
+        threeStarBonus: { metric: "maxChainCombo", minimum: 28 }
+      }
+    });
+    expect(DEFAULT_ARCADE_LEVELS[4]).toMatchObject({
+      title: "Overdrive Core",
+      thresholds: {
+        missionScore: 180_000,
+        twoStarScore: 360_000,
+        threeStarScore: 610_000,
+        threeStarBonus: { metric: "collateralChaos", minimum: 140_000 }
+      }
+    });
+  });
+
   test("records attempts, keeps best score, and never downgrades stars", () => {
     const initial = createInitialArcadeProgress(LEVELS);
     const first = recordArcadeRun(

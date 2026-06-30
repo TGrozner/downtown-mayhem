@@ -65,7 +65,7 @@ DIST_DIR="$AUDIT_DIST" npm run harden:dist
 
 - Mouse move: aim the cannon
 - Left click / Space: fire the one available shot
-- 1-4: choose projectile
+- 1-4: choose a standard projectile
 - R: retry the current district
 - C: clear dynamic debris during the run
 - Tab: switch district
@@ -76,12 +76,15 @@ DIST_DIR="$AUDIT_DIST" npm run harden:dist
 - Fragmentation Cluster: weaker first hit that seeds explosive clusters around impact
 - Impulse Orb: broad pressure radius with limited destructive force outside the core
 - Heavy Penetrator: direct-impact round that punches through solid buildings without exploding
+- Ignite Lattice: late-game sci-fi Daily Contract payload that primes fictional hazard chains
 
 ## Chambers
 
 - Hazard Junction: dense city block with a central hazard core, transformer relays, moving vehicles, cargo, and power lines
 - Breaker Yard: full breaker district with a concrete spine, transformer yards, relay towers, fuel traffic, and dense blocks
 - Switchback Crush: full glass-and-foam district with archive towers, baffles, service traffic, and redirect paths
+- Relay Gauntlet: late breaker route for payload-specific mastery through relays, weak points, traffic, and the boss capacitor
+- Overdrive Core: final combined challenge with archive glass, redirect pads, traffic, and a high-score cascade route
 
 ## Score
 

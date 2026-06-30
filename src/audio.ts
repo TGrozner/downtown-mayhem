@@ -266,6 +266,7 @@ export class DestructionAudio {
     this.playBuffer(this.pick(blastSamples), {
       gain: 0.7 * intensity,
       rate: this.randomRange(0.78, 1.03),
+      delay: role === "primary" ? 0.018 : role === "ignition" ? 0.012 : 0,
       pan,
       highpass: 28,
       lowpass: 5200
@@ -273,7 +274,7 @@ export class DestructionAudio {
     this.playBuffer(this.pick(["lowBoomA", "lowBoomB"]), {
       gain: 0.36 * intensity,
       rate: this.randomRange(0.58, 0.76),
-      delay: 0.018,
+      delay: role === "primary" ? 0.075 : 0.018,
       pan,
       lowpass: 900
     });
@@ -287,11 +288,11 @@ export class DestructionAudio {
       this.playDebrisTail(materialIds, intensity, pan);
       this.playCollapseLayer(materialIds, intensity, pan, collapseWeight >= 7.5 ? "major" : "medium", 0.08);
     }
-    if (role === "primary" && (collapseWeight >= 5.8 || intensity > 1.35)) {
+    if (role === "primary" && collapseWeight >= 7.5) {
       this.playBuffer(this.pick(["massiveWallCollapseTail", "urbanExplosion"]), {
-        gain: 0.2 * intensity,
+        gain: 0.22 * intensity,
         rate: this.randomRange(0.52, 0.7),
-        delay: 0.2,
+        delay: 0.24,
         pan,
         lowpass: 680
       });
@@ -339,6 +340,20 @@ export class DestructionAudio {
     this.playNoiseBurst(0.072 * intensity, 0.22, pan, 760, 4200, 0.015);
   }
 
+  playScatterMiniDetonation(point: THREE.Vector3, intensity: number, delay = 0): void {
+    const pan = this.panFromPoint(point);
+    const loudness = THREE.MathUtils.clamp(intensity, 0.45, 1.35);
+    this.playBuffer(this.pick(["mortarExplosion", "plateHeavyA", "glassRubbleCollapse"]), {
+      gain: 0.075 * loudness,
+      rate: this.randomRange(1.04, 1.28),
+      delay,
+      pan: THREE.MathUtils.clamp(pan + this.randomRange(-0.18, 0.18), -0.85, 0.85),
+      highpass: 180,
+      lowpass: 5200
+    });
+    this.playNoiseBurst(0.028 * loudness, 0.12, pan, 900, 5600, delay + 0.006);
+  }
+
   playGravityCrush(point: THREE.Vector3, intensity: number): void {
     const pan = this.panFromPoint(point);
     const loudness = THREE.MathUtils.clamp(intensity, 0.75, 2);
@@ -357,6 +372,23 @@ export class DestructionAudio {
       lowpass: 2200
     });
     this.playRumble(0.44 * loudness, 1.35, 34, 12, pan, 0.015);
+  }
+
+  playHazardDetonationCue(point: THREE.Vector3, intensity: number, materialId: MaterialId, mushroomCloud = false): void {
+    const pan = this.panFromPoint(point);
+    const loudness = THREE.MathUtils.clamp(intensity, 0.55, mushroomCloud ? 2.4 : 1.55);
+    const frequency = hazardWarningFrequency(materialId) * (mushroomCloud ? 0.62 : 0.82);
+    this.playTone({
+      frequency,
+      duration: mushroomCloud ? 0.18 : 0.12,
+      gain: (mushroomCloud ? 0.07 : 0.045) * loudness,
+      bus: "sfx",
+      pan,
+      type: materialId === "metal" || materialId === "glass" ? "triangle" : "sawtooth",
+      lowpass: mushroomCloud ? 1800 : 3200
+    });
+    this.playNoiseBurst((mushroomCloud ? 0.065 : 0.038) * loudness, mushroomCloud ? 0.24 : 0.16, pan, 120, 3200, 0.035);
+    this.playRumble((mushroomCloud ? 0.18 : 0.1) * loudness, mushroomCloud ? 0.85 : 0.5, 48, 18, pan, 0.02);
   }
 
   private async loadSamples(): Promise<void> {
