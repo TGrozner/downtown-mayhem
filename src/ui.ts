@@ -3090,6 +3090,10 @@ function installStyles(): void {
         display: none;
       }
 
+      .hud__mission > small {
+        display: none;
+      }
+
       .hud__mission > em {
         display: block;
         overflow: hidden;
@@ -3409,6 +3413,7 @@ function installStyles(): void {
 
       .hud__mission-kicker,
       .hud__mission > span,
+      .hud__mission > small,
       .hud__goal-grid,
       .hud__loadout-head,
       .hud__projectile small,
