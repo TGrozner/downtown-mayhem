@@ -6446,63 +6446,63 @@ function residualBlastRadiusScale(projectileId: ProjectileId): number {
 function impactVisualRadiusScale(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "slug":
-      return 1.5;
+      return 1.62;
     case "gravity":
-      return 1.36;
+      return 1.44;
     case "pulse":
-      return 1.68;
+      return 1.82;
     case "scatter":
-      return 1.46;
+      return 1.58;
     case "ignite":
-      return 1.42;
+      return 1.55;
   }
 }
 
 function gravityImpactVisualRadius(active: ActiveProjectile, result: ExplosionResult | null): number {
   const fractureBoost = Math.min(2.2, (result?.fracturedBodies ?? 0) * 0.07);
-  return Math.max(7.2, active.definition.blastRadius * active.sizeScale * 9.4 + fractureBoost);
+  return Math.max(7.8, active.definition.blastRadius * active.sizeScale * 10.1 + fractureBoost);
 }
 
 function projectileImpactShake(projectileId: ProjectileId): { magnitude: number; duration: number } {
   switch (projectileId) {
     case "slug":
-      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.08, duration: PRIMARY_IMPACT_SHAKE_DURATION };
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.16, duration: PRIMARY_IMPACT_SHAKE_DURATION * 1.04 };
     case "scatter":
-      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 0.96, duration: PRIMARY_IMPACT_SHAKE_DURATION * 0.82 };
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.05, duration: PRIMARY_IMPACT_SHAKE_DURATION * 0.9 };
     case "pulse":
-      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.14, duration: PRIMARY_IMPACT_SHAKE_DURATION * 0.9 };
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.22, duration: PRIMARY_IMPACT_SHAKE_DURATION };
     case "gravity":
-      return { magnitude: GRAVITY_IMPACT_SHAKE_MAGNITUDE, duration: GRAVITY_IMPACT_SHAKE_DURATION };
+      return { magnitude: GRAVITY_IMPACT_SHAKE_MAGNITUDE * 1.06, duration: GRAVITY_IMPACT_SHAKE_DURATION * 1.08 };
     case "ignite":
-      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.18, duration: PRIMARY_IMPACT_SHAKE_DURATION * 1.05 };
+      return { magnitude: PRIMARY_IMPACT_SHAKE_MAGNITUDE * 1.26, duration: PRIMARY_IMPACT_SHAKE_DURATION * 1.12 };
   }
 }
 
 function projectileImpactHitStop(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "scatter":
-      return PRIMARY_IMPACT_HIT_STOP_SECONDS * 0.82;
-    case "pulse":
       return PRIMARY_IMPACT_HIT_STOP_SECONDS * 0.9;
+    case "pulse":
+      return PRIMARY_IMPACT_HIT_STOP_SECONDS * 0.98;
     case "gravity":
-      return GRAVITY_IMPACT_HIT_STOP_SECONDS;
+      return GRAVITY_IMPACT_HIT_STOP_SECONDS * 1.08;
     case "slug":
     case "ignite":
-      return PRIMARY_IMPACT_HIT_STOP_SECONDS * 1.08;
+      return PRIMARY_IMPACT_HIT_STOP_SECONDS * 1.18;
   }
 }
 
 function projectileImpactSlowMo(projectileId: ProjectileId): number {
   switch (projectileId) {
     case "scatter":
-      return PRIMARY_IMPACT_SLOWMO_SECONDS * 0.78;
-    case "pulse":
       return PRIMARY_IMPACT_SLOWMO_SECONDS * 0.88;
+    case "pulse":
+      return PRIMARY_IMPACT_SLOWMO_SECONDS;
     case "gravity":
-      return GRAVITY_IMPACT_SLOWMO_SECONDS;
+      return GRAVITY_IMPACT_SLOWMO_SECONDS * 1.14;
     case "slug":
     case "ignite":
-      return PRIMARY_IMPACT_SLOWMO_SECONDS * 1.08;
+      return PRIMARY_IMPACT_SLOWMO_SECONDS * 1.18;
   }
 }
 
