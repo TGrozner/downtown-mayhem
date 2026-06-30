@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { ExplosionAffectedObject, ExplosionResult } from "./destruction";
 import { PhysicsWorld } from "./physics";
+import { IGNITE_CHAIN_LABEL } from "./projectile";
 import type { ProjectileDefinition } from "./projectile";
 
 const CHAIN_BASE_POINTS_CAP = 900;
@@ -102,7 +103,9 @@ export class ShotScoreTracker {
     const cappedPoints = Math.min(points, CHAIN_BASE_POINTS_CAP);
     const multiplier = 1 + Math.min(0.9, (combo - 1) * 0.12);
     const decay = combo <= 3 ? 1 : 1 / (1 + (combo - 3) * 0.18);
-    const awarded = Math.min(CHAIN_AWARDED_POINTS_CAP, Math.round(cappedPoints * multiplier * decay));
+    const ignitionChain = this.currentProjectile?.id === "ignite" && isIgnitionChainLabel(label);
+    const ignitionMultiplier = ignitionChain ? 1.34 : 1;
+    const awarded = Math.min(CHAIN_AWARDED_POINTS_CAP, Math.round(cappedPoints * multiplier * decay * ignitionMultiplier));
     this.chainReactionBonus += awarded;
     if (!position) {
       return [];
@@ -110,7 +113,7 @@ export class ShotScoreTracker {
     return [
       {
         kind: "chain",
-        label: label ? chainSourceLabel(label, combo) : chainLabel(combo),
+        label: label ? chainSourceLabel(ignitionChain ? ignitionSourceLabel(label) : label, combo) : chainLabel(combo),
         points: awarded,
         combo,
         position: position.clone().add(new THREE.Vector3(0, 1.1, 0))
@@ -394,6 +397,38 @@ function chainLabel(combo: number): string {
 
 function chainSourceLabel(label: string, combo: number): string {
   return combo >= 2 ? `${label} x${combo}` : label;
+}
+
+function ignitionSourceLabel(label: string): string {
+  const normalized = label.trim();
+  if (normalized.toUpperCase().includes(IGNITE_CHAIN_LABEL.toUpperCase())) {
+    return normalized;
+  }
+  return `${IGNITE_CHAIN_LABEL}: ${normalized}`;
+}
+
+function isIgnitionChainLabel(label: string | undefined): boolean {
+  if (!label) {
+    return false;
+  }
+  const text = label.toLowerCase();
+  return (
+    text.includes("ignite") ||
+    text.includes("ignition") ||
+    text.includes("fire") ||
+    text.includes("burn") ||
+    text.includes("hazard") ||
+    text.includes("relay") ||
+    text.includes("shock") ||
+    text.includes("transformer") ||
+    text.includes("power") ||
+    text.includes("energy") ||
+    text.includes("gas") ||
+    text.includes("fuel") ||
+    text.includes("propane") ||
+    text.includes("vehicle") ||
+    text.includes("reactor")
+  );
 }
 
 function objectScoreLabel(object: ExplosionAffectedObject): string {

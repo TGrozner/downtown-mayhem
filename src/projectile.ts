@@ -36,6 +36,9 @@ export interface ActiveProjectile {
 }
 
 export const IGNITE_UNLOCK_LEVEL_COUNT = 5;
+export const IGNITE_CHAIN_OBJECTIVE_ID = "ignite-ignition-chain";
+export const IGNITE_ARMING_LABEL = "Hazard lattice armed";
+export const IGNITE_CHAIN_LABEL = "Ignition Chain";
 export const PROJECTILE_ORDER: ProjectileId[] = ["slug", "scatter", "pulse", "gravity"];
 export const LATE_GAME_PROJECTILE_ORDER: ProjectileId[] = [...PROJECTILE_ORDER, "ignite"];
 
@@ -127,7 +130,7 @@ export const PROJECTILES: Record<ProjectileId, ProjectileDefinition> = {
     blastRadius: 4.65,
     fractureBoost: 1.18,
     scoreModifier: 1.18,
-    description: "Late-game sci-fi lattice that primes fictional hazard chains without a heavy first impact."
+    description: "Late-game sci-fi lattice that arms fictional hazards, then scores on delayed ignition chains."
   }
 };
 

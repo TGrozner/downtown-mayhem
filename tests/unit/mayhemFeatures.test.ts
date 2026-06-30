@@ -13,6 +13,7 @@ import {
   runVariantForSeed,
   summarizeScoreSources
 } from "../../src/mayhemFeatures";
+import { IGNITE_CHAIN_LABEL, IGNITE_CHAIN_OBJECTIVE_ID } from "../../src/projectile";
 
 const MISSION: ArcadeMissionFields = {
   arc: "object-destruction",
@@ -82,6 +83,61 @@ describe("mayhem feature helpers", () => {
     }
     expect(dailyContractForDate(levels, igniteDate)?.projectileId).toBe("ignite");
     expect(dailyContractForDate(levels.slice(0, 4), igniteDate)?.projectileId).not.toBe("ignite");
+  });
+
+  test("gives Ignite a dedicated ignition chain contract and retry hint", () => {
+    const variant = runVariantForSeed("relay-gauntlet", 9898);
+    const mission: ArcadeMissionFields = {
+      ...MISSION,
+      order: 4,
+      targetZone: "breaker-boss",
+      scoreThresholds: {
+        oneStar: 155_000,
+        twoStar: 315_000,
+        threeStar: 520_000
+      },
+      targetDamageThreshold: 58_000,
+      bonusThreshold: { metric: "maxChainCombo", minimum: 28 }
+    };
+    const contract = mayhemContractForRun("relay-gauntlet", mission, "ignite", variant);
+
+    expect(contract.objectives).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: IGNITE_CHAIN_OBJECTIVE_ID,
+          label: expect.stringContaining(IGNITE_CHAIN_LABEL),
+          metric: "maxChainCombo",
+          minimum: 24
+        }),
+        expect.objectContaining({
+          id: `${variant.id}-district-contract`,
+          metric: "chainReactionBonus"
+        })
+      ])
+    );
+
+    const feedback = runFeedbackForScore({
+      score: score({ totalScore: 250_000, targetDamage: 70_000, maxChainCombo: 8, chainReactionBonus: 18_000 }),
+      mission,
+      variant,
+      contract,
+      contractResult: {
+        completed: false,
+        objectives: [
+          { id: IGNITE_CHAIN_OBJECTIVE_ID, label: `${IGNITE_CHAIN_LABEL}: arm hazards`, completed: false, value: 8, target: 24 }
+        ]
+      },
+      topSources: [{ kind: "chain", label: "Secondary chain", points: 18_000 }],
+      replayMoment: { label: `${IGNITE_CHAIN_LABEL}: GAS RELAY BLAST combo`, points: 900 },
+      projectileId: "ignite"
+    });
+
+    expect(feedback.nearMisses[0]).toContain("Ignition route:");
+    expect(feedback.nearMisses.join(" ")).toContain("delayed Ignition Chain");
+    expect(feedback.projectileObjective).toMatchObject({
+      id: IGNITE_CHAIN_OBJECTIVE_ID,
+      metric: "maxChainCombo"
+    });
   });
 
   test("summarizes score sources and chooses a replay moment", () => {

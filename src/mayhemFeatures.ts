@@ -1,6 +1,11 @@
 import type { ArcadeContractObjective, ArcadeContractResult, ArcadeStars } from "./arcade";
 import type { ArcadeMissionFields } from "./levels";
-import { projectileOrderForUnlockedLevels, type ProjectileId } from "./projectile";
+import {
+  IGNITE_CHAIN_LABEL,
+  IGNITE_CHAIN_OBJECTIVE_ID,
+  projectileOrderForUnlockedLevels,
+  type ProjectileId
+} from "./projectile";
 import type { ScoreBreakdown, ScoreEvent } from "./scoring";
 
 export const DAILY_RESULTS_STORAGE_KEY = "downtown-mayhem:daily-results";
@@ -277,10 +282,10 @@ export function projectileObjectiveFor(projectileId: ProjectileId, mission: Arca
       };
     case "ignite":
       return {
-        id: "ignite-relay-fire",
-        label: "Ignite objective: light a chain reaction",
-        metric: "chainReactionCount",
-        minimum: Math.max(45, Math.round(mission.bonusThreshold.minimum * 0.62))
+        id: IGNITE_CHAIN_OBJECTIVE_ID,
+        label: `${IGNITE_CHAIN_LABEL}: arm hazards, then cash a delayed relay fire`,
+        metric: "maxChainCombo",
+        minimum: igniteChainMinimum(mission)
       };
   }
 }
@@ -416,6 +421,9 @@ export function chainMilestoneForCombo(combo: number): { combo: number; label: s
 }
 
 function districtContractMetric(variant: RunVariant, projectileId: ProjectileId): ArcadeContractObjective["metric"] {
+  if (projectileId === "ignite") {
+    return "chainReactionBonus";
+  }
   if (variant.id === "heavy-salvage" || projectileId === "gravity") {
     return "targetDamage";
   }
@@ -479,6 +487,9 @@ function nearMissHints(
   variant: RunVariant
 ): string[] {
   const hints: string[] = [];
+  if (projectileId === "ignite" && score.maxChainCombo < igniteChainMinimum(mission)) {
+    hints.push(`Ignition route: arm a hazard lane first, then wait for a delayed ${IGNITE_CHAIN_LABEL} before scoring.`);
+  }
   if (score.totalScore < mission.scoreThresholds.twoStar) {
     hints.push(`Retry route: ${variantRetryRoute(variant, projectileId)} for ${(mission.scoreThresholds.twoStar - score.totalScore).toLocaleString("en-US")} more Mayhem.`);
   }
@@ -628,7 +639,7 @@ function variantRetryRoute(variant: RunVariant, projectileId: ProjectileId): str
     return "line the Heavy shot through the thickest structure row";
   }
   if (projectileId === "ignite") {
-    return "ignite hazards that can spread into relay chains";
+    return "arm a hazard lane with Ignite, then let the delayed relay fire spread";
   }
   if (variant.id === "rush-hour") {
     return "hit the busiest lane before traffic clears";
@@ -664,6 +675,16 @@ function metricRetryPlan(metric: ArcadeContractObjective["metric"]): string {
     case "projectile":
       return "the required payload";
   }
+}
+
+function igniteChainMinimum(mission: ArcadeMissionFields): number {
+  if (mission.bonusThreshold.metric === "maxChainCombo") {
+    return Math.max(18, Math.round(mission.bonusThreshold.minimum * 0.86));
+  }
+  if (mission.bonusThreshold.metric === "chainReactionCount") {
+    return Math.max(18, Math.round(mission.bonusThreshold.minimum * 0.12));
+  }
+  return Math.max(20, Math.round(mission.scoreThresholds.twoStar / 14_500));
 }
 
 function formatScore(value: number): string {

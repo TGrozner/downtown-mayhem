@@ -3,6 +3,7 @@ import * as THREE from "three";
 import type { ExplosionAffectedObject, ExplosionResult } from "../../src/destruction";
 import type { PhysicsWorld } from "../../src/physics";
 import {
+  IGNITE_CHAIN_LABEL,
   IGNITE_UNLOCK_LEVEL_COUNT,
   LATE_GAME_PROJECTILE_ORDER,
   PROJECTILE_ORDER,
@@ -33,7 +34,8 @@ describe("ShotScoreTracker", () => {
       key: "5",
       name: "Ignite Lattice",
       shortName: "Ignite",
-      role: "Sci-fi ignition"
+      role: "Sci-fi ignition",
+      description: "Late-game sci-fi lattice that arms fictional hazards, then scores on delayed ignition chains."
     });
   });
 
@@ -204,6 +206,27 @@ describe("ShotScoreTracker", () => {
       label: "GAS LINE BLAST x2",
       points: 1008,
       combo: 2
+    });
+  });
+
+  test("gives Ignite a readable ignition-chain score identity", () => {
+    const tracker = new ShotScoreTracker();
+    tracker.beginShot(PROJECTILES.ignite);
+
+    expect(tracker.addChainReaction(100, new THREE.Vector3(0, 0, 0), "GAS RELAY BLAST")[0]).toMatchObject({
+      label: `${IGNITE_CHAIN_LABEL}: GAS RELAY BLAST`,
+      points: 134,
+      combo: 1
+    });
+    expect(tracker.addChainReaction(100, new THREE.Vector3(0, 0, 0), "TRANSFORMER FIRE")[0]).toMatchObject({
+      label: `${IGNITE_CHAIN_LABEL}: TRANSFORMER FIRE x2`,
+      points: 150,
+      combo: 2
+    });
+    expect(tracker.finalize(fakePhysics([]))).toMatchObject({
+      chainReactionBonus: 335,
+      totalScore: 335,
+      maxChainCombo: 2
     });
   });
 
