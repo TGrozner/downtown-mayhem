@@ -136,6 +136,11 @@ const FIRE_SPREAD_SCAN_INTERVAL_MS = 520;
 const FIRE_SPREAD_MAX_CHILDREN = 1;
 const SCATTER_PHYSICAL_SHARD_COUNT = 8;
 const VOLATILE_TRIGGER_LIMIT_BY_DEPTH = [3, 1, 0] as const;
+const PROJECTILE_TRAIL_INTERVAL_MS = 92;
+const PROJECTILE_TRAIL_PERFORMANCE_INTERVAL_MS = 155;
+const HAZARD_WARNING_WINDOW_MS = 1300;
+const HAZARD_FOCUS_WINDOW_MS = 720;
+const VEHICLE_HAZARD_TRIGGER_LIMIT_BY_DEPTH = [2, 1, 0] as const;
 const CAMERA_FOCUS_MIN_SCORE = 155;
 const CAMERA_FOCUS_LOCK_MS = 1100;
 const CAMERA_FOCUS_DECAY_MS = 3400;
@@ -188,6 +193,12 @@ const ADAPTIVE_PERF_LEVEL_TWO_DPR_CAP = 0.8;
 
 type AdaptivePerformanceLevel = 0 | 1 | 2;
 
+interface ChainMilestoneCue {
+  combo: number;
+  label: string;
+  position: THREE.Vector3;
+}
+
 interface BurningHazard {
   id: number;
   label: string;
@@ -196,6 +207,7 @@ interface BurningHazard {
   explodeAt: number;
   nextFxAt: number;
   nextSpreadAt: number;
+  focusCuePlayed: boolean;
   strength: number;
   radius: number;
   heatRadius: number;
@@ -2156,6 +2168,7 @@ class Game {
   private readonly processedSurfaceImpactObjectIds = new Set<number>();
   private readonly triggeredHazards = new Set<number>();
   private readonly burningHazards = new Map<number, BurningHazard>();
+  private readonly breakCashoutsAwarded = new Set<number>();
   private readonly visibleRenderMaterialsScratch = new Set<THREE.Material>();
 
   private settings: GameSettings;
@@ -2192,6 +2205,7 @@ class Game {
   private adaptivePerfRecoveryElapsed = 0;
   private aimTrafficAccumulator = 0;
   private nextChainCooldownSweep = 0;
+  private nextProjectileTrailAt = 0;
   private spectacleFocusScore = 0;
   private spectacleFocusUpdatedAt = 0;
   private moneyShotScore = 0;
@@ -2421,19 +2435,20 @@ class Game {
       this.cannon.update(delta, PROJECTILES[this.selectedProjectile], this.powerScale, this.sizeScale);
       perfMonitor.addTiming("game.cannon", startedAt);
 
-      if (this.runState.phase === "aim") {
+      if (this.shouldAdvanceTraffic()) {
         startedAt = perfMonitor.timeStart();
         this.aimTrafficAccumulator += delta;
         if (this.aimTrafficAccumulator >= AIM_TRAFFIC_STEP_SECONDS) {
           const trafficDelta = Math.min(this.aimTrafficAccumulator, AIM_TRAFFIC_MAX_ACCUMULATED_SECONDS);
           this.aimTrafficAccumulator = 0;
-          this.physics.advanceTrafficRoutes(trafficDelta);
+          this.physics.advanceTrafficRoutes(trafficDelta * (this.runState.phase === "aim" ? 1 : timeScale));
         }
-        this.physics.updateTrafficVisuals(delta);
+        this.physics.updateTrafficVisuals(delta * visualScale);
         perfMonitor.addTiming("physics.traffic", startedAt);
+      } else {
+        this.aimTrafficAccumulator = 0;
       }
       if (this.runState.phase !== "aim") {
-        this.aimTrafficAccumulator = 0;
         startedAt = perfMonitor.timeStart();
         this.physics.step(simulationDelta * timeScale);
         perfMonitor.addTiming("physics.step", startedAt);
@@ -2631,6 +2646,7 @@ class Game {
     this.shotMayhemContract = null;
     this.primaryImpactStarted = false;
     this.chainMilestonesAwarded.clear();
+    this.breakCashoutsAwarded.clear();
     this.runScoreEvents.length = 0;
     this.runFeedback = null;
     this.scoreReadyToFinalize = false;
@@ -2639,6 +2655,7 @@ class Game {
     this.scoreSettleLastActivityAt = null;
     this.moneyShotScore = 0;
     this.moneyShotLockedUntil = 0;
+    this.nextProjectileTrailAt = 0;
   }
 
   private beginSpectacle(nowMs = performance.now()): void {
@@ -2659,11 +2676,12 @@ class Game {
     const milestone = this.nextChainMilestone(events);
     if (milestone) {
       this.scorePopups.showChainMilestone(milestone.label, milestone.combo, revealDelaySeconds);
+      this.playChainMilestoneBeat(milestone);
     }
   }
 
-  private nextChainMilestone(events: readonly ScoreEvent[]): { combo: number; label: string } | null {
-    let bestMilestone: { combo: number; label: string } | null = null;
+  private nextChainMilestone(events: readonly ScoreEvent[]): ChainMilestoneCue | null {
+    let bestMilestone: ChainMilestoneCue | null = null;
     for (const event of events) {
       if (event.kind !== "chain" || !event.combo) {
         continue;
@@ -2674,10 +2692,25 @@ class Game {
       }
       this.chainMilestonesAwarded.add(milestone.combo);
       if (!bestMilestone || milestone.combo > bestMilestone.combo) {
-        bestMilestone = milestone;
+        bestMilestone = { ...milestone, position: event.position.clone() };
       }
     }
     return bestMilestone;
+  }
+
+  private playChainMilestoneBeat(milestone: ChainMilestoneCue): void {
+    if (this.adaptivePerfLevel < 2) {
+      this.particles.chainMilestoneBurst(milestone.position, milestone.combo, milestone.combo >= 100 ? 0xfff0a8 : 0x93f6ff);
+    }
+    if (this.settings.motionEffects) {
+      const comboScale = THREE.MathUtils.clamp(milestone.combo / 100, 0.35, 1.35);
+      this.cameraRig.shake(0.08 + comboScale * 0.08, 0.22 + comboScale * 0.14);
+      this.slowMotionTimer = Math.max(this.slowMotionTimer, milestone.combo >= 100 ? 0.3 : 0.18);
+    }
+    const focus = milestone.position.clone();
+    focus.y = THREE.MathUtils.clamp(focus.y + 0.45, 0.75, 4.8);
+    this.cameraRig.spectacle(focus);
+    this.status = `${milestone.label}: x${milestone.combo} chain.`;
   }
 
   private captureRenderStats(): DowntownMayhemRenderStats {
@@ -2795,6 +2828,7 @@ class Game {
         return;
       }
       this.cameraRig.followProjectile(position, velocity);
+      this.updateProjectileFlightCue(active, position, velocity);
       const impact = this.detectImpact(active);
       if (impact || active.age > 7.5) {
         this.handleImpact(impact?.point ?? position, active, impact?.object ?? null);
@@ -2803,6 +2837,21 @@ class Game {
     }
 
     this.updateScoreReveal();
+  }
+
+  private updateProjectileFlightCue(active: ActiveProjectile, position: THREE.Vector3, velocity: THREE.Vector3): void {
+    if (this.adaptivePerfLevel >= 2) {
+      return;
+    }
+    const now = performance.now();
+    if (now < this.nextProjectileTrailAt) {
+      return;
+    }
+    const interval = this.effectiveGraphicsQuality() === "performance" ? PROJECTILE_TRAIL_PERFORMANCE_INTERVAL_MS : PROJECTILE_TRAIL_INTERVAL_MS;
+    this.nextProjectileTrailAt = now + interval;
+    const speed = velocity.length();
+    const intensity = THREE.MathUtils.clamp(0.45 + speed / Math.max(1, active.definition.speed * active.powerScale) * 0.55, 0.45, 1.35);
+    this.particles.projectileTrail(position, active.definition.id, velocity, intensity * this.runtimeVfxDensityScale());
   }
 
   private updateScoreReveal(): void {
@@ -2935,6 +2984,13 @@ class Game {
     return 1;
   }
 
+  private shouldAdvanceTraffic(): boolean {
+    if (this.runState.score) {
+      return false;
+    }
+    return this.runState.phase === "aim" || this.runState.phase === "flight";
+  }
+
   private fractureTimeBudgetMs(): number {
     return this.adaptivePerfLevel >= 2 ? 0.75 : this.adaptivePerfLevel >= 1 ? 1.25 : FRACTURE_PROCESS_TIME_BUDGET_MS;
   }
@@ -2948,7 +3004,7 @@ class Game {
   }
 
   private hazardFxIntervalMs(remainingMs: number): number {
-    const base = remainingMs < 820 ? 110 : 180;
+    const base = remainingMs < HAZARD_WARNING_WINDOW_MS ? 110 : 180;
     return Math.round(base * (this.adaptivePerfLevel >= 2 ? 2.8 : this.adaptivePerfLevel >= 1 ? 1.75 : 1));
   }
 
@@ -4533,10 +4589,48 @@ class Game {
 
   private applyExplosionResult(result: ExplosionResult, cascadeDepth = 0, igniteBias = 0): ScoreEvent[] {
     const events = this.scoreTracker.addExplosion(result);
+    events.push(...this.playSpecialBreakCues(result, cascadeDepth));
     this.queueIgnitions(result, igniteBias, cascadeDepth);
     if (cascadeDepth < 2) {
+      this.triggerVehicleHazards(result, cascadeDepth);
       events.push(...this.triggerVolatileHazards(result, cascadeDepth));
     }
+    return events;
+  }
+
+  private playSpecialBreakCues(result: ExplosionResult, cascadeDepth: number): ScoreEvent[] {
+    const events: ScoreEvent[] = [];
+    let strongest: ExplosionAffectedObject | null = null;
+    for (const object of result.affectedObjects) {
+      if (!object.fractured || this.breakCashoutsAwarded.has(object.id) || !isSpecialBreakObject(object)) {
+        continue;
+      }
+      this.breakCashoutsAwarded.add(object.id);
+      if (!strongest || specialBreakPriority(object) > specialBreakPriority(strongest)) {
+        strongest = object;
+      }
+    }
+    if (!strongest) {
+      return events;
+    }
+
+    const origin = strongest.position.clone().add(new THREE.Vector3(0, 0.42, 0));
+    const bossBreak = isBossPhaseBreak(strongest);
+    if (this.adaptivePerfLevel < 2) {
+      this.particles.cashoutPulse(origin, bossBreak ? 0xffd15c : 0x93f6ff, bossBreak ? 1.45 : 1.05);
+      this.particles.spark(origin, bossBreak ? 0xffd15c : 0x93f6ff, bossBreak ? 1.15 : 0.85);
+    }
+    this.focusSpectacleOn(origin, result, bossBreak ? 260 : 170, bossBreak);
+    if (this.settings.motionEffects) {
+      this.cameraRig.shake(bossBreak ? 0.24 : 0.16, bossBreak ? 0.48 : 0.34);
+      this.slowMotionTimer = Math.max(this.slowMotionTimer, bossBreak ? 0.28 : 0.16);
+    }
+    const armedNearby = this.armNearbyCashoutHazard(origin, cascadeDepth, strongest);
+    const points = Math.max(80, Math.round(strongest.weightedDamage * (bossBreak ? 0.42 : 0.28)));
+    events.push(...this.scoreTracker.addChainReaction(points, origin, bossBreak ? "BOSS CASHOUT" : "WEAK POINT CASHOUT"));
+    this.status = armedNearby
+      ? `${bossBreak ? "Boss" : "Weak-point"} cashout armed a nearby hazard.`
+      : `${bossBreak ? "Boss" : "Weak-point"} cashout triggered.`;
     return events;
   }
 
@@ -4564,6 +4658,108 @@ class Game {
       }
     }
     return events;
+  }
+
+  private triggerVehicleHazards(result: ExplosionResult, cascadeDepth: number): void {
+    const triggerLimit = VEHICLE_HAZARD_TRIGGER_LIMIT_BY_DEPTH[cascadeDepth] ?? 0;
+    if (triggerLimit <= 0) {
+      return;
+    }
+    let queuedCount = 0;
+    const candidates = result.affectedObjects
+      .filter((object) => object.fractured && !this.triggeredHazards.has(object.id) && isActiveVehicleHazard(object))
+      .sort(sortActiveVehicleHazards)
+      .slice(0, triggerLimit);
+
+    for (const object of candidates) {
+      const sourceObject = this.physics.getObject(object.id);
+      if (!sourceObject) {
+        continue;
+      }
+      const origin = ignitionOriginForObject(sourceObject);
+      const profile = ignitionHazardProfile(object, 0.72, Math.max(0.8, object.energy / Math.max(1, object.scoreValue * 0.56)));
+      profile.delayScale = Math.min(profile.delayScale, 0.5);
+      profile.maxSpreadCount = Math.max(profile.maxSpreadCount, 1);
+      const queued = this.queueBurningHazardFromAffectedObject(
+        object,
+        profile,
+        origin,
+        Math.min(2, cascadeDepth + 1),
+        THREE.MathUtils.randInt(620, 1050)
+      );
+      if (!queued) {
+        continue;
+      }
+      queuedCount += 1;
+      this.triggeredHazards.add(object.id);
+      this.swerveActiveVehicle(sourceObject, result.origin);
+      if (this.adaptivePerfLevel < 2) {
+        this.particles.armingPulse(origin, 0.82, profile.color);
+        this.particles.fireLick(origin, 0.62 * this.runtimeVfxDensityScale());
+      }
+      this.focusSpectacleOn(origin, result, 120);
+      if (queuedCount >= triggerLimit) {
+        return;
+      }
+    }
+  }
+
+  private swerveActiveVehicle(object: PhysicsObject, origin: THREE.Vector3): void {
+    if (object.bodyType !== "dynamic") {
+      return;
+    }
+    const position = vectorFromRapier(object.body.translation());
+    const away = position.sub(origin);
+    away.y = 0;
+    if (away.lengthSq() < 0.0001) {
+      away.set(1, 0, 0);
+    }
+    away.normalize();
+    const side = new THREE.Vector3(-away.z, 0, away.x).multiplyScalar(THREE.MathUtils.randFloat(0.65, 1.1));
+    const impulseScale = THREE.MathUtils.clamp(Math.max(object.dimensions.x, object.dimensions.z) * 2.4, 1.25, 3.6);
+    const impulse = away.multiplyScalar(impulseScale).add(side.multiplyScalar(impulseScale * 0.7));
+    object.body.applyImpulse({ x: impulse.x, y: 0.22, z: impulse.z }, true);
+    object.body.applyTorqueImpulse({ x: impulse.z * 0.08, y: impulseScale * 0.12, z: -impulse.x * 0.08 }, true);
+  }
+
+  private armNearbyCashoutHazard(origin: THREE.Vector3, cascadeDepth: number, source: ExplosionAffectedObject): boolean {
+    if (this.burningHazards.size >= MAX_BURNING_HAZARDS) {
+      return false;
+    }
+    let target: PhysicsObject | null = null;
+    let targetPriority = Number.NEGATIVE_INFINITY;
+    const candidates = this.physics.getBlastCandidatesInto(this.fireSpreadCandidates, origin, isBossPhaseBreak(source) ? 5.6 : 4.2);
+    for (const candidate of candidates) {
+      if (this.triggeredHazards.has(candidate.id) || this.burningHazards.has(candidate.id) || !canIgnitePhysicsObject(candidate)) {
+        continue;
+      }
+      const priority = fireSpreadPriority(candidate, origin) + cashoutHazardPriority(candidate);
+      if (priority > targetPriority) {
+        target = candidate;
+        targetPriority = priority;
+      }
+    }
+    if (!target) {
+      return false;
+    }
+    const targetOrigin = ignitionOriginForObject(target);
+    const pseudoAffected = affectedObjectFromPhysics(target, targetOrigin, Math.max(180, source.energy * 0.42 + source.scoreValue * 0.36));
+    const profile = ignitionHazardProfile(pseudoAffected, isBossPhaseBreak(source) ? 0.88 : 0.62, Math.max(0.8, source.energy / Math.max(1, source.scoreValue)));
+    const queued = this.queueBurningHazardFromAffectedObject(
+      pseudoAffected,
+      profile,
+      targetOrigin,
+      Math.min(2, cascadeDepth + 1),
+      THREE.MathUtils.randInt(560, isBossPhaseBreak(source) ? 980 : 1220)
+    );
+    if (!queued) {
+      return false;
+    }
+    this.triggeredHazards.add(target.id);
+    if (this.adaptivePerfLevel < 2) {
+      this.particles.armingPulse(targetOrigin, 0.95, profile.color);
+    }
+    return true;
   }
 
   private queueIgnitions(result: ExplosionResult, igniteBias: number, cascadeDepth: number): void {
@@ -4625,6 +4821,7 @@ class Game {
       explodeAt: now + delay + Math.random() * 260,
       nextFxAt: now,
       nextSpreadAt: now + THREE.MathUtils.randInt(FIRE_SPREAD_MIN_DELAY_MS, FIRE_SPREAD_MAX_DELAY_MS),
+      focusCuePlayed: false,
       strength: profile.strength,
       radius: profile.radius,
       heatRadius: profile.heatRadius,
@@ -4666,14 +4863,21 @@ class Game {
         if (this.adaptivePerfLevel < 2) {
           this.particles.fireLick(hazard.origin, (0.56 + burnAge * 0.5) * this.runtimeVfxDensityScale());
         }
-        if (remainingMs < 820) {
-          const warningProgress = 1 - Math.max(0, remainingMs) / 820;
+        if (remainingMs < HAZARD_WARNING_WINDOW_MS) {
+          const warningProgress = 1 - Math.max(0, remainingMs) / HAZARD_WARNING_WINDOW_MS;
           if (this.adaptivePerfLevel < 2) {
-            this.particles.armingPulse(hazard.origin, warningProgress, ignitionWarningColor(hazard));
+            this.particles.armingPulse(hazard.origin, 0.32 + warningProgress * 0.95, ignitionWarningColor(hazard));
           }
           this.audio.playHazardWarning(hazard.origin, warningProgress, hazard.materialId);
         }
         hazard.nextFxAt = now + this.hazardFxIntervalMs(remainingMs);
+      }
+      if (!hazard.focusCuePlayed && remainingMs < HAZARD_FOCUS_WINDOW_MS) {
+        hazard.focusCuePlayed = true;
+        this.cameraRig.spectacle(hazard.origin.clone().add(new THREE.Vector3(0, 0.52, 0)));
+        if (this.settings.motionEffects) {
+          this.cameraRig.shake(hazard.mushroomCloud ? 0.18 : 0.11, hazard.mushroomCloud ? 0.4 : 0.26);
+        }
       }
       if (now >= hazard.nextSpreadAt && remainingMs > 260 && hazard.spreadCount < hazard.maxSpreadCount) {
         events.push(...this.spreadBurningHazard(hazard));
@@ -5666,6 +5870,78 @@ function isChainTarget(object: PhysicsObject): boolean {
   return object.category !== "projectile" && !object.isDebris && object.destructible && object.canFracture;
 }
 
+function isSpecialBreakObject(object: ExplosionAffectedObject): boolean {
+  const text = `${object.label} ${object.zoneId ?? ""}`.toLowerCase();
+  return (
+    text.includes("weak-point") ||
+    text.includes("weak point") ||
+    text.includes("boss") ||
+    text.includes("phase-") ||
+    text.includes("cashout") ||
+    text.includes("release") ||
+    text.includes("latch") ||
+    text.includes("shear pin")
+  );
+}
+
+function isBossPhaseBreak(object: ExplosionAffectedObject): boolean {
+  const text = `${object.label} ${object.zoneId ?? ""}`.toLowerCase();
+  return text.includes("boss") || text.includes("phase-3") || text.includes("cashout");
+}
+
+function specialBreakPriority(object: ExplosionAffectedObject): number {
+  const text = `${object.label} ${object.zoneId ?? ""}`.toLowerCase();
+  let priority = object.scoreValue;
+  if (text.includes("cashout") || text.includes("phase-3")) {
+    priority += 620;
+  }
+  if (text.includes("boss")) {
+    priority += 520;
+  }
+  if (text.includes("weak-point") || text.includes("weak point")) {
+    priority += 280;
+  }
+  if (text.includes("release") || text.includes("latch") || text.includes("shear pin")) {
+    priority += 160;
+  }
+  return priority;
+}
+
+function isActiveVehicleHazard(object: ExplosionAffectedObject): boolean {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  return (
+    isVehicleExplosionHazard(label, zone) &&
+    (zone.includes("moving-vehicles") ||
+      zone.includes("traffic-bait") ||
+      zone.includes("pressure-bulb") ||
+      zone.includes("fuel") ||
+      label.includes("tanker") ||
+      label.includes("bus") ||
+      label.includes("truck"))
+  );
+}
+
+function sortActiveVehicleHazards(a: ExplosionAffectedObject, b: ExplosionAffectedObject): number {
+  return activeVehicleHazardPriority(b) - activeVehicleHazardPriority(a) || b.energy - a.energy;
+}
+
+function activeVehicleHazardPriority(object: ExplosionAffectedObject): number {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  let priority = volatileHazardPriority(object);
+  if (zone.includes("fuel") || label.includes("tanker")) {
+    priority += 70;
+  }
+  if (zone.includes("traffic-bait") || zone.includes("pressure-bulb")) {
+    priority += 52;
+  }
+  if (isLargeVehicleHazard(label)) {
+    priority += 26;
+  }
+  return priority;
+}
+
 function isVolatileHazard(object: ExplosionAffectedObject): boolean {
   const label = object.label.toLowerCase();
   const zone = object.zoneId ?? "";
@@ -6119,6 +6395,25 @@ function fireSpreadPriority(object: PhysicsObject, origin: THREE.Vector3): numbe
     priority += 58;
   }
   return priority - distancePenalty;
+}
+
+function cashoutHazardPriority(object: PhysicsObject): number {
+  const label = object.label.toLowerCase();
+  const zone = object.zoneId ?? "";
+  let priority = 0;
+  if (zone.includes("pressure-bulb") || zone.includes("hazard-relay")) {
+    priority += 95;
+  }
+  if (zone.includes("power-grid") || zone.includes("capacitor-bank")) {
+    priority += 72;
+  }
+  if (zone.includes("fuel") || label.includes("tanker")) {
+    priority += 58;
+  }
+  if (zone.includes("moving-vehicles")) {
+    priority += 34;
+  }
+  return priority;
 }
 
 function ignitionHazardProfile(object: ExplosionAffectedObject, igniteBias: number, energyRatio: number): VolatileHazardProfile {

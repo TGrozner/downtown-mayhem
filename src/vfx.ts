@@ -605,6 +605,33 @@ export class ParticleSystem {
     this.spawnBurst(origin, 42, 0x707780, 0.9, 0.09, 5.5, 0.7, 0.24);
   }
 
+  projectileTrail(origin: THREE.Vector3, projectileId: ProjectileId, direction: THREE.Vector3, intensity = 1): void {
+    const amount = THREE.MathUtils.clamp(intensity, 0.35, 1.6);
+    const color = WARMUP_PROJECTILE_COLORS[projectileId];
+    const back = direction.lengthSq() > 0.0001 ? direction.clone().normalize().multiplyScalar(-0.22) : ZERO_VECTOR;
+    const trailOrigin = this.offsetOrigin(origin, back.x, back.y + 0.05, back.z);
+    switch (projectileId) {
+      case "scatter":
+        this.spawnBurst(trailOrigin, Math.round(18 * amount), color, 0.32, 0.024, 8.5 * amount, 0.28, 0.05, THREE.AdditiveBlending);
+        break;
+      case "pulse":
+        this.spawnPressureWave(trailOrigin, 0.52 * amount, color, 0.14, amount * 0.72);
+        this.spawnSprite(trailOrigin, SHOCK_TEXTURE, color, 0.2 * amount, 0.72 * amount, 0.14, 0.05, 0.03, THREE.AdditiveBlending, 1.1);
+        break;
+      case "gravity":
+        this.spawnSprite(trailOrigin, SMOKE_TEXTURE, 0x221534, 0.24 * amount, 0.88 * amount, 0.16, 0.18, 0.02, THREE.NormalBlending, 0.62);
+        this.spawnBurst(trailOrigin, Math.round(12 * amount), color, 0.48, 0.03, 5.5 * amount, 0.18, 0.1, THREE.AdditiveBlending);
+        break;
+      case "ignite":
+        this.spawnSprite(trailOrigin, CORE_TEXTURE, color, 0.18 * amount, 0.7 * amount, 0.22, 0.18, 0.05, THREE.AdditiveBlending, 1.12);
+        this.spawnBurst(trailOrigin, Math.round(15 * amount), 0xffb16b, 0.38, 0.028, 6.5 * amount, 0.12, 0.08, THREE.AdditiveBlending);
+        break;
+      case "slug":
+        this.spawnBurst(trailOrigin, Math.round(10 * amount), color, 0.28, 0.026, 5.8 * amount, 0.22, 0.08, THREE.AdditiveBlending);
+        break;
+    }
+  }
+
   ruptureDebrisSplash(origin: THREE.Vector3, intensity = 1, color: THREE.ColorRepresentation = 0xc08a4a): void {
     const count = Math.round(80 * intensity);
     this.spawnBurst(origin, count, color, 1.65, 0.085, 7.5 * intensity, 1.5, 0.32);
@@ -635,6 +662,25 @@ export class ParticleSystem {
     if (this.quality !== "performance") {
       this.spawnArcWeb(origin, (mushroomCloud ? 1.2 : 0.78) * amount, color, Math.round((mushroomCloud ? 16 : 9) * amount), 0.26);
       this.spawnBurst(this.offsetOrigin(origin, 0, 0.12, 0), Math.round((mushroomCloud ? 38 : 22) * amount), color, 0.3, 0.032, 8.5 * amount, 0.12, 0.05, THREE.AdditiveBlending);
+    }
+  }
+
+  chainMilestoneBurst(origin: THREE.Vector3, combo: number, color: THREE.ColorRepresentation = 0xffd25c): void {
+    const amount = THREE.MathUtils.clamp(combo / 65, 0.75, 2.25);
+    this.spawnPressureWave(origin, 1.15 * amount, color, 0.28, amount);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.28, 0), CORE_TEXTURE, color, 0.24 * amount, 1.45 * amount, 0.28, 0.14, 0.04, THREE.AdditiveBlending, 1.18);
+    if (this.quality !== "performance") {
+      this.spawnArcWeb(origin, 0.9 * amount, color, Math.round(7 + amount * 9), 0.28);
+      this.spawnBurst(this.offsetOrigin(origin, 0, 0.18, 0), Math.round(24 * amount), color, 0.45, 0.033, 9.5 * amount, 0.22, 0.06, THREE.AdditiveBlending);
+    }
+  }
+
+  cashoutPulse(origin: THREE.Vector3, color: THREE.ColorRepresentation = 0x93f6ff, intensity = 1): void {
+    const amount = THREE.MathUtils.clamp(intensity, 0.55, 2.4);
+    this.spawnPressureWave(origin, 1.08 * amount, color, 0.26, amount);
+    this.spawnSprite(this.offsetOrigin(origin, 0, 0.32, 0), CORE_TEXTURE, color, 0.28 * amount, 1.25 * amount, 0.34, 0.22, 0.05, THREE.AdditiveBlending, 1.22);
+    if (this.quality !== "performance") {
+      this.spawnArcWeb(origin, 0.82 * amount, color, Math.round(9 * amount), 0.3);
     }
   }
 
